@@ -1,0 +1,320 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ====== 文献管理 ======
+
+model Paper {
+  id          String   @id @default(uuid())
+  title       String
+  authors     String   // JSON 数组字符串，如 ["张三", "李四"]
+  journal     String?
+  year        Int?
+  volume      String?
+  issue       String?
+  pages       String?
+  doi         String?  @unique
+  abstract    String?
+  content     String? // PDF 全文（用于全文检索）
+  keywords    String?  // JSON 数组字符串
+  filePath    String?  // PDF 文件路径
+  fileName    String?  // 原始文件名
+  fileSize    Int?     // 字节
+  url         String?  // 在线阅读链接
+  status      String   @default("unread") // unread | reading | read
+  rating      Int?     // 1-5
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  notes         PaperNote[]
+  tags          PaperTagRelation[]
+  citations     Citation[]
+  experimentRefs ExperimentRef[]
+  projectPapers ProjectPaper[]
+  pdfAnnotations PdfAnnotation[]
+
+  // 环境科学特有字段
+  standardType   String? // GB | HJ | EPA | ISO | null
+  standardNumber String? // 标准号，如 "GB/T 5750.3-2023"
+}
+
+model PaperNote {
+  id        String   @id @default(uuid())
+  paperId   String
+  content   String   // Markdown 内容
+  isPrivate Boolean  @default(false) // 私人笔记 vs 共享笔记
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  paper     Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+}
+
+model Tag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  color     String   @default("#3B82F6")
+  createdAt DateTime @default(now())
+
+  papers    PaperTagRelation[]
+}
+
+model PaperTagRelation {
+  id      String @id @default(uuid())
+  paperId String
+  tagId   String
+
+  paper   Paper  @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  tag     Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([paperId, tagId])
+}
+
+// ====== 引用格式缓存 ======
+
+model Citation {
+  id       String   @id @default(uuid())
+  paperId  String   @unique
+  style    String   @default("gbt7714") // gbt7714 | apa | acs
+  content  String
+  updatedAt DateTime @updatedAt
+
+  paper    Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+}
+
+// ====== 研究项目 ======
+
+model Project {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  status      String    @default("active") // active | completed | paused
+  phase       String    @default("preparation") // preparation | experiment | writing | completed
+  progress    Int       @default(0) // 0-100
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  milestones  Milestone[]
+  experiments Experiment[]
+  papers      ProjectPaper[]
+  tasks       Task[]
+  documents   Document[]
+}
+
+model Milestone {
+  id        String    @id @default(uuid())
+  projectId String
+  title     String
+  dueDate   DateTime?
+  completed Boolean   @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Experiment {
+  id          String   @id @default(uuid())
+  projectId   String
+  title       String
+  objective   String?
+  methods     String?  // Markdown
+  reagents    String?  // JSON: [{name, purity, amount, batch}]
+  conditions  String?  // JSON: {temperature, pH, pressure, duration...}
+  results     String?  // Markdown
+  conclusion  String?
+  images      String?  // JSON 数组，图片路径
+  tags        String?  // JSON 数组字符串，如 ["环境监测","水质"]
+  status      String   @default("draft") // draft | in_progress | completed | failed
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  refs        ExperimentRef[]
+  data        ExperimentData[]
+}
+
+model ExperimentRef {
+  id           String     @id @default(uuid())
+  experimentId String
+  paperId      String
+  note         String?
+
+  experiment   Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  paper        Paper      @relation(fields: [paperId], references: [id], onDelete: Cascade)
+}
+
+model ExperimentData {
+  id           String     @id @default(cuid())
+  experimentId String
+  experiment   Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  label        String     // 数据点标签（如"样品A"）
+  xValue       Float      // X 轴数值
+  yValue       Float      // Y 轴数值
+  series       String?    // 系列名称（用于多系列图表，如"实验组"、"对照组"）
+  createdAt    DateTime   @default(now())
+}
+
+model ProjectPaper {
+  id        String @id @default(uuid())
+  projectId String
+  paperId   String
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  paper     Paper   @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, paperId])
+}
+
+// ====== 知识管理 ======
+
+model KnowledgeNote {
+  id        String   @id @default(uuid())
+  title     String
+  content   String   // Markdown
+  category  String?  // 分类
+  links     String?  // JSON: 双链引用 ["note:id1", "paper:id2", "experiment:id3"]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tags      KnowledgeNoteTag[]
+}
+
+model KnowledgeTag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  notes     KnowledgeNoteTag[]
+}
+
+model KnowledgeNoteTag {
+  id     String        @id @default(uuid())
+  noteId String
+  tagId  String
+
+  note   KnowledgeNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  tag    KnowledgeTag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, tagId])
+}
+
+// ====== 任务管理 ======
+
+model Task {
+  id        String    @id @default(uuid())
+  title     String
+  description String?
+  priority  String    @default("medium") // low | medium | high | urgent
+  status    String    @default("todo") // todo | in_progress | done
+  dueDate   DateTime?
+  projectId String?
+  pomodoroCount Int    @default(0)
+  pomodoroMinutes Int @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+}
+
+// ====== 写作中心 ======
+
+model Document {
+  id              String    @id @default(uuid())
+  title           String
+  type            String    @default("paper") // paper | thesis | report | proposal
+  status          String    @default("draft") // draft | writing | revising | submitted | published
+  description     String?
+  targetWordCount Int       @default(5000)
+  projectId       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  chapters        Chapter[]
+  versions        Version[]
+  project         Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+}
+
+model Chapter {
+  id          String   @id @default(uuid())
+  documentId  String
+  title       String
+  content     String   @default("") // Markdown
+  order       Int      @default(0)
+  wordCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
+
+model WritingGoal {
+  id            String   @id @default(uuid())
+  type          String   @default("daily") // daily | weekly
+  targetWords   Int      @default(500)
+  achievedWords Int      @default(0)
+  date          String   // YYYY-MM-DD
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([type, date])
+}
+
+model Version {
+  id          String   @id @default(uuid())
+  documentId  String
+  versionName String
+  content     String   // 全文档 JSON 快照（含所有章节）
+  wordCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
+
+// ====== 活动日志 ======
+
+model Activity {
+  id        String   @id @default(uuid())
+  type      String   // paper_added | paper_read | experiment_created | note_created | task_completed
+  title     String
+  detail    String?
+  targetId  String?  // 关联的对象 ID
+  createdAt DateTime @default(now())
+}
+
+// ====== PDF 批注 ======
+
+model PdfAnnotation {
+  id           String   @id @default(uuid())
+  paperId      String
+  page         Int      @default(1) // 页码
+  content      String   // 批注内容 (Markdown)
+  color        String   @default("#FFEB3B") // 高亮颜色
+  selectedText String?  // 选中的原文
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  paper        Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+}
+
+// ====== 实验模板 ======
+
+model ExperimentTemplate {
+  id          String   @id @default(uuid())
+  name        String   // 模板名称
+  category    String   // 分类: 水质/土壤/大气/微生物/重金属/有机物
+  description String?
+  objective   String?
+  methods     String?  // Markdown
+  reagents    String?  // JSON: [{name, purity, amount}]
+  conditions  String?  // JSON: {temperature, pH, pressure, duration...}
+  isBuiltin   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

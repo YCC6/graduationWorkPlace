@@ -1,0 +1,41 @@
+# 依赖
+node_modules/
+
+# 构建产物
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+
+# 数据库（含个人研究数据，绝不入库）
+prisma/dev.db
+prisma/dev.db-journal
+*.sqlite
+*.sqlite3
+
+# 上传文件（PDF / 实验图片等个人资料）
+uploads/
+public/uploads/
+
+# 环境变量与密钥
+.env
+.env.local
+.env.*.local
+*.pem
+
+# 日志
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+.vscode-test/
+coverage/
+
+# 部署
+.vercel
