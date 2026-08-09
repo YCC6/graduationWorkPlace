@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { CheckSquare, Plus, Clock, Loader2, Check, Circle, Trash2, X } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { CheckSquare, Plus, Clock, Loader2, Check, Circle, Trash2, X, Timer, Play, Pause, RotateCcw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import toast from "react-hot-toast";
 
@@ -13,6 +13,8 @@ interface Task {
   status: string;
   dueDate: string | null;
   project?: { id: string; name: string } | null;
+  pomodoroCount: number;
+  pomodoroMinutes: number;
 }
 
 const PRIORITY_LABELS: Record<string, string> = { urgent: "紧急", high: "高", medium: "中", low: "低" };
@@ -23,6 +25,9 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "text-gray-500 bg-gray-100",
 };
 
+const DEFAULT_POMODORO_MIN = 25;
+const DURATION_OPTIONS = [15, 25, 45];
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +36,13 @@ export default function TasksPage() {
   const [formPriority, setFormPriority] = useState("medium");
   const [formDueDate, setFormDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // 番茄钟状态
+  const [pomodoroTask, setPomodoroTask] = useState<Task | null>(null);
+  const [durationMin, setDurationMin] = useState(DEFAULT_POMODORO_MIN);
+  const [secondsLeft, setSecondsLeft] = useState(DEFAULT_POMODORO_MIN * 60);
+  const [isRunning, setIsRunning] = useState(false);
+  const completingRef = useRef(false);
 
   const loadTasks = async () => {
     setLoading(true);
@@ -44,6 +56,72 @@ export default function TasksPage() {
   };
 
   useEffect(() => { loadTasks(); }, []);
+
+  // 番茄钟倒计时
+  useEffect(() => {
+    if (isRunning && pomodoroTask) {
+      const t = setInterval(() => {
+        setSecondsLeft((s) => (s > 0 ? s - 1 : 0));
+      }, 1000);
+      return () => clearInterval(t);
+    }
+  }, [isRunning, pomodoroTask]);
+
+  // 倒计时归零 -> 自动记录一个番茄钟
+  useEffect(() => {
+    if (secondsLeft === 0 && isRunning && pomodoroTask && !completingRef.current) {
+      completingRef.current = true;
+      completePomodoro();
+    }
+  }, [secondsLeft, isRunning, pomodoroTask]);
+
+  const openPomodoro = (task: Task) => {
+    setPomodoroTask(task);
+    setDurationMin(DEFAULT_POMODORO_MIN);
+    setSecondsLeft(DEFAULT_POMODORO_MIN * 60);
+    setIsRunning(true);
+    completingRef.current = false;
+  };
+
+  const closePomodoro = () => {
+    setPomodoroTask(null);
+    setIsRunning(false);
+    completingRef.current = false;
+  };
+
+  const changeDuration = (min: number) => {
+    if (isRunning) return;
+    setDurationMin(min);
+    setSecondsLeft(min * 60);
+  };
+
+  const completePomodoro = async () => {
+    if (!pomodoroTask) return;
+    const newCount = (pomodoroTask.pomodoroCount || 0) + 1;
+    const newMinutes = (pomodoroTask.pomodoroMinutes || 0) + durationMin;
+    try {
+      await fetch("/api/tasks", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: pomodoroTask.id,
+          pomodoroCount: newCount,
+          pomodoroMinutes: newMinutes,
+        }),
+      });
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === pomodoroTask.id ? { ...t, pomodoroCount: newCount, pomodoroMinutes: newMinutes } : t
+        )
+      );
+      toast.success(`完成 1 个番茄钟（${durationMin} 分钟）`);
+    } catch {
+      toast.error("记录番茄钟失败");
+    }
+    setIsRunning(false);
+    setSecondsLeft(durationMin * 60);
+    completingRef.current = false;
+  };
 
   const toggleTask = async (task: Task) => {
     const newStatus = task.status === "done" ? "todo" : "done";
@@ -95,6 +173,13 @@ export default function TasksPage() {
 
   const todoTasks = tasks.filter((t) => t.status !== "done");
   const doneTasks = tasks.filter((t) => t.status === "done");
+
+  const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const totalSec = durationMin * 60;
+  const progress = totalSec > 0 ? 1 - secondsLeft / totalSec : 0;
+  const RADIUS = 86;
+  const CIRC = 2 * Math.PI * RADIUS;
+  const OFFSET = CIRC * (1 - progress);
 
   return (
     <div className="p-6 space-y-5 max-w-3xl">
@@ -148,12 +233,24 @@ export default function TasksPage() {
                   <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${PRIORITY_COLORS[task.priority]}`}>
                     {PRIORITY_LABELS[task.priority]}
                   </span>
+                  {task.pomodoroCount > 0 && (
+                    <span className="text-[10px] text-rose-500 flex items-center gap-0.5 shrink-0" title={`已专注 ${task.pomodoroMinutes} 分钟`}>
+                      🍅 {task.pomodoroCount}
+                    </span>
+                  )}
                   {task.dueDate && (
                     <span className="text-xs text-muted-foreground flex items-center gap-1 shrink-0">
                       <Clock className="h-3 w-3" />
                       {formatDate(task.dueDate, "short")}
                     </span>
                   )}
+                  <button
+                    onClick={() => openPomodoro(task)}
+                    className="p-1 rounded hover:bg-rose-50 text-muted-foreground hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                    title="开始专注（番茄钟）"
+                  >
+                    <Timer className="h-3.5 w-3.5" />
+                  </button>
                   <button
                     onClick={() => deleteTask(task.id)}
                     className="p-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
@@ -184,6 +281,11 @@ export default function TasksPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm line-through">{task.title}</p>
                   </div>
+                  {task.pomodoroCount > 0 && (
+                    <span className="text-[10px] text-rose-400 flex items-center gap-0.5 shrink-0">
+                      🍅 {task.pomodoroCount}
+                    </span>
+                  )}
                   <button
                     onClick={() => deleteTask(task.id)}
                     className="p-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
@@ -195,6 +297,92 @@ export default function TasksPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 番茄钟弹窗 */}
+      {pomodoroTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={closePomodoro}>
+          <div className="bg-background rounded-xl shadow-xl border w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold flex items-center gap-2">
+                <Timer className="h-4 w-4 text-rose-500" />
+                专注中
+              </h3>
+              <button onClick={closePomodoro} className="p-1 rounded hover:bg-muted">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-sm text-muted-foreground mb-1 truncate">{pomodoroTask.title}</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              累计 🍅 {pomodoroTask.pomodoroCount} 个 · {pomodoroTask.pomodoroMinutes} 分钟
+            </p>
+
+            {/* 圆环倒计时 */}
+            <div className="relative w-[200px] h-[200px] mx-auto mb-5">
+              <svg width="200" height="200" className="absolute inset-0">
+                <circle cx="100" cy="100" r={RADIUS} strokeWidth="10" fill="none" className="stroke-muted/30" />
+                <circle
+                  cx="100"
+                  cy="100"
+                  r={RADIUS}
+                  strokeWidth="10"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeDasharray={CIRC}
+                  strokeDashoffset={OFFSET}
+                  transform="rotate(-90 100 100)"
+                  className="stroke-rose-500 transition-all duration-1000 ease-linear"
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-4xl font-semibold tabular-nums text-foreground">{fmt(secondsLeft)}</span>
+                <span className="text-xs text-muted-foreground mt-1">{isRunning ? "进行中" : "已暂停"}</span>
+              </div>
+            </div>
+
+            {/* 时长选择 */}
+            <div className="flex justify-center gap-2 mb-4">
+              {DURATION_OPTIONS.map((min) => (
+                <button
+                  key={min}
+                  onClick={() => changeDuration(min)}
+                  disabled={isRunning}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
+                    durationMin === min ? "bg-rose-500 text-white" : "bg-muted/40 text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  {min} 分
+                </button>
+              ))}
+            </div>
+
+            {/* 控制按钮 */}
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => setIsRunning((r) => !r)}
+                className="inline-flex items-center gap-1.5 px-4 h-9 bg-rose-500 text-white rounded-lg text-sm font-medium hover:bg-rose-600 transition-colors"
+              >
+                {isRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {isRunning ? "暂停" : "开始"}
+              </button>
+              <button
+                onClick={() => { setSecondsLeft(durationMin * 60); setIsRunning(false); }}
+                className="p-2 h-9 w-9 rounded-lg border hover:bg-muted transition-colors"
+                title="重置"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+              <button
+                onClick={completePomodoro}
+                className="px-3 h-9 text-sm rounded-lg border hover:bg-muted transition-colors"
+                title="提前记录本次"
+              >
+                记录本次
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
