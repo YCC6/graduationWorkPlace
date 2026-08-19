@@ -10,6 +10,7 @@ import {
   HardDrive,
 } from "lucide-react";
 import toast from "react-hot-toast";
+import AiSettingsCard from "@/components/AiSettingsCard";
 
 export default function SettingsPage() {
   const [restoring, setRestoring] = useState(false);
@@ -54,6 +55,9 @@ export default function SettingsPage() {
         <ShieldCheck className="h-5 w-5 text-primary" />
         <h1 className="text-lg font-semibold">设置 / 数据管理</h1>
       </div>
+
+      {/* AI 模型配置 */}
+      <AiSettingsCard />
 
       {/* 数据备份 */}
       <div className="rounded-xl border bg-card p-5 space-y-4">

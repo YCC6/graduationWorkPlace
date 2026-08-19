@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { extractPdfText } from "@/lib/pdf";
 
 export async function GET(request: NextRequest) {
   try {
@@ -110,7 +111,30 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json(paper, { status: 201 });
+    // 上传的是 PDF 则自动提取全文，使 AI 总结/翻译开箱即用，无需手动点「全文索引」
+    let indexedChars = 0;
+    if (paper.filePath && /\.pdf$/i.test(paper.filePath)) {
+      try {
+        const text = await extractPdfText(paper.filePath);
+        if (text) {
+          await prisma.paper.update({
+            where: { id: paper.id },
+            data: { content: text },
+          });
+          indexedChars = text.length;
+        }
+      } catch (e) {
+        // 提取失败不影响文献创建，用户仍可在详情页手动触发「全文索引」
+        console.error("自动提取全文失败:", e);
+      }
+    }
+
+    // paper 是 create 时的快照，content 恒为 null，
+    // 单独回传 indexedChars 让前端能提示「已索引 N 字」或索引失败。
+    return NextResponse.json(
+      { ...paper, indexedChars },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("创建文献失败:", error);
     return NextResponse.json({ error: "创建文献失败" }, { status: 500 });

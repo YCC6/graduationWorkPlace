@@ -1,0 +1,26 @@
+appId: com.gradworkbench.app
+productName: 文献管理工作台
+copyright: Copyright © 2026
+directories:
+  output: dist-electron
+  buildResources: build
+files:
+  - "electron/**/*"
+  - "package.json"
+  - ".next/standalone/**/*"
+  - "prisma/**/*"
+  - "public/**/*"
+asar: true
+# Prisma 引擎与 SQLite 原生模块必须解包到 asar 之外才能执行
+asarUnpack:
+  - "**/.prisma/**"
+  - "**/@prisma/client/**"
+  - "**/prisma/**"
+  - "**/node_modules/.prisma/**"
+  - "**/*.node"
+win:
+  target: nsis
+nsis:
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 文献管理工作台

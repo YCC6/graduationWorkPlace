@@ -210,6 +210,190 @@ function parseGBT7714Line(line: string): ParsedPaper | null {
   };
 }
 
+// ====== RIS 解析 ======
+
+function parseRIS(raw: string): ParsedPaper[] {
+  const papers: ParsedPaper[] = [];
+  // RIS 通常以空行或 ER 分隔记录
+  let blocks: string[];
+  if (/\n\s*\n/.test(raw) && /TY\s+-\s/i.test(raw)) {
+    blocks = raw
+      .split(/\n\s*\n/)
+      .map((r) => r.trim())
+      .filter(Boolean);
+  } else {
+    blocks = raw
+      .split(/ER\s*-\s*/i)
+      .map((r) => r.trim())
+      .filter(Boolean);
+  }
+
+  for (const block of blocks) {
+    const fields: Record<string, string> = {};
+    const authors: string[] = [];
+    let title = "";
+    let abstract = "";
+    let sp = "";
+    let ep = "";
+
+    for (const line of block.split(/\r?\n/)) {
+      const m = line.trim().match(/^([A-Z0-9]{2})\s+-\s+(.*)$/);
+      if (!m) continue;
+      const tag = m[1].toUpperCase();
+      const val = m[2].trim();
+      switch (tag) {
+        case "TI":
+        case "T1":
+          title = val;
+          break;
+        case "AU":
+        case "A1":
+        case "A2":
+          authors.push(val);
+          break;
+        case "JO":
+        case "JF":
+        case "JA":
+        case "T2":
+          fields.journal = val;
+          break;
+        case "PY":
+        case "Y1":
+          fields.year = val;
+          break;
+        case "VL":
+          fields.volume = val;
+          break;
+        case "IS":
+        case "N1":
+          fields.issue = val;
+          break;
+        case "SP":
+          sp = val;
+          break;
+        case "EP":
+          ep = val;
+          break;
+        case "DO":
+          fields.doi = val;
+          break;
+        case "UR":
+          fields.url = val;
+          break;
+        case "AB":
+        case "N2":
+          abstract = val;
+          break;
+      }
+    }
+
+    if (!title) continue;
+    const year = fields.year
+      ? parseInt(fields.year.replace(/[^0-9]/g, "").slice(0, 4)) || null
+      : null;
+    const pages = sp ? (ep ? `${sp}-${ep}` : sp) : ep || null;
+
+    papers.push({
+      title,
+      authors,
+      journal: fields.journal || null,
+      year,
+      volume: fields.volume || null,
+      issue: fields.issue || null,
+      pages,
+      doi: fields.doi || null,
+      abstract: abstract || null,
+      url: fields.url || (fields.doi ? `https://doi.org/${fields.doi}` : null),
+      raw: block,
+    });
+  }
+  return papers;
+}
+
+// ====== EndNote 标记格式 (.enw) 解析 ======
+
+function parseEndNote(raw: string): ParsedPaper[] {
+  const papers: ParsedPaper[] = [];
+  const blocks = raw
+    .split(/(?=%0)/)
+    .map((r) => r.trim())
+    .filter(Boolean);
+  const segs = blocks.length > 1 ? blocks : raw.split(/\n\s*\n/).map((r) => r.trim()).filter(Boolean);
+
+  for (const block of segs) {
+    const fields: Record<string, string> = {};
+    const authors: string[] = [];
+    let title = "";
+    let abstract = "";
+
+    for (const line of block.split(/\r?\n/)) {
+      const m = line.trim().match(/^%([A-Za-z0-9])\s+(.*)$/);
+      if (!m) continue;
+      const tag = m[1].toUpperCase();
+      const val = m[2].trim();
+      switch (tag) {
+        case "T":
+        case "T1":
+          title = val;
+          break;
+        case "A":
+        case "A1":
+        case "AU":
+          authors.push(val);
+          break;
+        case "J":
+        case "JF":
+        case "JO":
+          fields.journal = val;
+          break;
+        case "D":
+          fields.year = val;
+          break;
+        case "V":
+          fields.volume = val;
+          break;
+        case "N":
+          fields.issue = val;
+          break;
+        case "P":
+          fields.pages = val;
+          break;
+        case "R":
+          fields.doi = val;
+          break;
+        case "U":
+        case "UR":
+          fields.url = val;
+          break;
+        case "X":
+        case "AB":
+          abstract = val;
+          break;
+      }
+    }
+
+    if (!title) continue;
+    const year = fields.year
+      ? parseInt(fields.year.replace(/[^0-9]/g, "").slice(0, 4)) || null
+      : null;
+
+    papers.push({
+      title,
+      authors,
+      journal: fields.journal || null,
+      year,
+      volume: fields.volume || null,
+      issue: fields.issue || null,
+      pages: fields.pages || null,
+      doi: fields.doi || null,
+      abstract: abstract || null,
+      url: fields.url || (fields.doi ? `https://doi.org/${fields.doi}` : null),
+      raw: block,
+    });
+  }
+  return papers;
+}
+
 // ====== 主解析逻辑 ======
 
 export async function POST(request: NextRequest) {
@@ -223,8 +407,11 @@ export async function POST(request: NextRequest) {
     const isBibtex = /@(article|book|inproceedings|incollection|thesis|mastersthesis|phdthesis|conference|techreport|misc)/i.test(
       raw
     );
+    const isRIS = /(^|\n)\s*(TY|PT)\s+-\s/i.test(raw);
+    const isEndNote = /(^|\n)\s*%[A-Za-z0-9]\s+/m.test(raw) && /%T/i.test(raw);
 
     let papers: ParsedPaper[] = [];
+    let format = "gbt7714";
 
     if (isBibtex) {
       const entries = extractBibtexEntries(raw);
@@ -232,6 +419,13 @@ export async function POST(request: NextRequest) {
         const p = parseBibtexEntry(e);
         if (p) papers.push(p);
       }
+      format = "bibtex";
+    } else if (isRIS) {
+      papers = parseRIS(raw);
+      format = "ris";
+    } else if (isEndNote) {
+      papers = parseEndNote(raw);
+      format = "endnote";
     } else {
       const lines = raw
         .split(/\r?\n/)
@@ -252,7 +446,7 @@ export async function POST(request: NextRequest) {
       return true;
     });
 
-    return NextResponse.json({ papers, format: isBibtex ? "bibtex" : "gbt7714" });
+    return NextResponse.json({ papers, format });
   } catch (error) {
     console.error("题录解析失败:", error);
     return NextResponse.json({ error: "题录解析失败" }, { status: 500 });

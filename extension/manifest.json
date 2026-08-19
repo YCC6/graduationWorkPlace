@@ -1,0 +1,100 @@
+{
+  "manifest_version": 3,
+  "name": "GradWorkbench 文献剪藏",
+  "version": "1.0.0",
+  "description": "在知网、PubMed、Google Scholar 等站点一键把论文元数据存入你的文献库，免去复制粘贴 DOI。",
+
+  "minimum_chrome_version": "102",
+
+  "permissions": ["activeTab", "scripting", "storage", "notifications"],
+
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+
+  "background": {
+    "service_worker": "src/background.js"
+  },
+
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "剪藏这篇论文到文献库",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.cnki.net/*",
+        "*://*.wanfangdata.com.cn/*",
+        "*://*.cqvip.com/*",
+        "*://pubmed.ncbi.nlm.nih.gov/*",
+        "*://scholar.google.com/*",
+        "*://scholar.google.com.hk/*",
+        "*://scholar.google.co.jp/*",
+        "*://scholar.google.co.uk/*",
+        "*://*.arxiv.org/*",
+        "*://arxiv.org/*",
+        "*://*.semanticscholar.org/*",
+        "*://*.sciencedirect.com/*",
+        "*://*.springer.com/*",
+        "*://*.link.springer.com/*",
+        "*://*.onlinelibrary.wiley.com/*",
+        "*://*.nature.com/*",
+        "*://*.science.org/*",
+        "*://pubs.acs.org/*",
+        "*://pubs.rsc.org/*",
+        "*://*.mdpi.com/*",
+        "*://*.tandfonline.com/*",
+        "*://*.oup.com/*",
+        "*://ieeexplore.ieee.org/*",
+        "*://dl.acm.org/*",
+        "*://*.frontiersin.org/*",
+        "*://*.plos.org/*",
+        "*://*.biorxiv.org/*",
+        "*://*.researchgate.net/*"
+      ],
+      "js": ["src/extractor.js", "src/content.js"],
+      "css": ["src/content.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "commands": {
+    "clip-current": {
+      "suggested_key": {
+        "default": "Alt+S",
+        "mac": "Alt+S"
+      },
+      "description": "剪藏当前论文到文献库"
+    }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

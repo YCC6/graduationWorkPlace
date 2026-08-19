@@ -1,0 +1,228 @@
+/**
+ * GradWorkbench 剪藏扩展 —— 注入样式
+ * 全部加 !important 并使用 gwb- 前缀，避免被宿主站点样式污染 / 污染宿主。
+ */
+
+/* ---------------- 悬浮按钮 ---------------- */
+
+.gwb-fab {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+  z-index: 2147483600 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  opacity: 0 !important;
+  transform: translateY(12px) !important;
+  transition: opacity 0.25s ease, transform 0.25s ease !important;
+  pointer-events: auto !important;
+}
+
+.gwb-fab--show {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
+.gwb-fab--hidden {
+  opacity: 0 !important;
+  transform: translateY(12px) !important;
+}
+
+.gwb-fab__main {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 11px 18px !important;
+  border: none !important;
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+  color: #ffffff !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  letter-spacing: 0.2px !important;
+  cursor: pointer !important;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.32),
+    0 2px 6px rgba(0, 0, 0, 0.08) !important;
+  transition: transform 0.18s ease, box-shadow 0.18s ease,
+    background 0.25s ease !important;
+  margin: 0 !important;
+  text-transform: none !important;
+  min-width: 0 !important;
+  height: auto !important;
+}
+
+.gwb-fab__main:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 10px 26px rgba(37, 99, 235, 0.4),
+    0 3px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
+.gwb-fab__main:active {
+  transform: translateY(0) !important;
+}
+
+.gwb-fab__main:disabled {
+  cursor: default !important;
+  opacity: 0.75 !important;
+}
+
+.gwb-fab__icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.gwb-fab__icon svg {
+  display: block !important;
+  width: 18px !important;
+  height: 18px !important;
+}
+
+.gwb-fab__label {
+  white-space: nowrap !important;
+}
+
+.gwb-fab--loading .gwb-fab__icon {
+  animation: gwb-spin 0.9s linear infinite !important;
+}
+
+.gwb-fab--done .gwb-fab__main {
+  background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
+  box-shadow: 0 6px 20px rgba(22, 163, 74, 0.3) !important;
+}
+
+.gwb-fab__close {
+  position: absolute !important;
+  top: -7px !important;
+  right: -7px !important;
+  width: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 50% !important;
+  background: #64748b !important;
+  color: #ffffff !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  opacity: 0 !important;
+  transition: opacity 0.2s ease, background 0.2s ease !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) !important;
+}
+
+.gwb-fab:hover .gwb-fab__close {
+  opacity: 1 !important;
+}
+
+.gwb-fab__close:hover {
+  background: #ef4444 !important;
+}
+
+@keyframes gwb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------- Toast ---------------- */
+
+.gwb-toast {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 88px !important;
+  z-index: 2147483601 !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  max-width: 340px !important;
+  padding: 12px 16px !important;
+  border-radius: 10px !important;
+  background: #0f172a !important;
+  color: #f8fafc !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25) !important;
+  opacity: 0 !important;
+  transform: translateY(8px) !important;
+  transition: opacity 0.25s ease, transform 0.25s ease !important;
+}
+
+.gwb-toast--show {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
+.gwb-toast__icon {
+  flex: 0 0 auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 18px !important;
+  height: 18px !important;
+  border-radius: 50% !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  background: #334155 !important;
+  color: #f8fafc !important;
+}
+
+.gwb-toast--success .gwb-toast__icon {
+  background: #16a34a !important;
+}
+
+.gwb-toast--error .gwb-toast__icon {
+  background: #ef4444 !important;
+}
+
+.gwb-toast__text {
+  flex: 1 1 auto !important;
+  word-break: break-word !important;
+}
+
+/* ---------------- Google Scholar 行内按钮 ---------------- */
+
+a.gwb-inline-btn {
+  display: inline-block !important;
+  margin-left: 10px !important;
+  padding: 1px 8px !important;
+  border: 1px solid #2563eb !important;
+  border-radius: 4px !important;
+  color: #2563eb !important;
+  background: transparent !important;
+  font-size: 12px !important;
+  line-height: 17px !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: background 0.15s ease, color 0.15s ease !important;
+  vertical-align: baseline !important;
+}
+
+a.gwb-inline-btn:hover {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  text-decoration: none !important;
+}
+
+a.gwb-inline-btn--done,
+a.gwb-inline-btn--done:hover {
+  border-color: #16a34a !important;
+  background: #16a34a !important;
+  color: #ffffff !important;
+  cursor: default !important;
+}
+
+/* ---------------- 深色页面适配 ---------------- */
+
+@media (prefers-color-scheme: dark) {
+  .gwb-toast {
+    background: #1e293b !important;
+  }
+}

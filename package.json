@@ -2,6 +2,7 @@
   "name": "grad-workbench",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +10,9 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "electron:start": "electron .",
+    "electron:build": "prisma generate && prisma db push && next build && electron-builder --win --x64"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -49,6 +52,8 @@
     "@types/react-dom": "^18.3.5",
     "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.20",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "tailwindcss-animate": "^1.0.7",

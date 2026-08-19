@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { existsSync } from "fs";
+import { getUploadsDir, publicUploadUrl } from "@/lib/storage";
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,8 +29,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `文件大小不能超过 ${isPdf ? 50 : 10}MB` }, { status: 400 });
     }
 
-    // 确保 uploads 目录存在
-    const uploadsDir = path.join(process.cwd(), "public", "uploads");
+    // 确保 uploads 目录存在（生产环境走持久卷 UPLOAD_DIR）
+    const uploadsDir = getUploadsDir();
     if (!existsSync(uploadsDir)) {
       await mkdir(uploadsDir, { recursive: true });
     }
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       fileName,
-      filePath: `/uploads/${fileName}`,
+      filePath: publicUploadUrl(fileName),
       fileSize: file.size,
     });
   } catch (error) {

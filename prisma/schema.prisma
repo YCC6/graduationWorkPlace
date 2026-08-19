@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL")
 }
 
 // ====== 文献管理 ======
@@ -41,6 +41,15 @@ model Paper {
   // 环境科学特有字段
   standardType   String? // GB | HJ | EPA | ISO | null
   standardNumber String? // 标准号，如 "GB/T 5750.3-2023"
+
+  // ====== AI 阅读辅助（结果落库缓存，避免重复调用付费接口）======
+  aiSummary          String?   // AI 结构化总结（Markdown）
+  aiSummaryAt        DateTime? // 总结生成时间
+  aiSummaryModel     String?   // 生成所用模型，换模型后可判断是否需要重算
+  aiTranslation      String?   // 翻译结果（Markdown，中英对照）
+  aiTranslationAt    DateTime? // 翻译生成时间
+  aiTranslationScope String?   // abstract | fulltext，标明翻译覆盖范围
+  aiTranslationModel String?   // 生成所用模型，换模型后可判断是否需要重算
 }
 
 model PaperNote {
@@ -317,4 +326,12 @@ model ExperimentTemplate {
   isBuiltin   Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ====== 应用配置（键值对，供 AI 模型配置等使用）======
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
 }

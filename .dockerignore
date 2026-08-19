@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+npm-debug.log
+Dockerfile
+docker-entrypoint.sh
+.dockerignore
+.env.local
+.env*.local
+*.db
+*.db-journal
+uploads
+public/uploads
+coverage

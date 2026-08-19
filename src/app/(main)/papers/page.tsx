@@ -9,6 +9,7 @@ import {
   Filter,
   X,
   Download,
+  Edit3,
   FileText,
   Star,
   BookOpen,
@@ -20,6 +21,7 @@ import {
   Upload,
   FileUp,
   Settings,
+  Save,
   Trash2,
   Check,
   ClipboardPaste,
@@ -39,6 +41,15 @@ interface Paper {
   tags: Array<{ tag: { id: string; name: string; color: string } }>;
   createdAt: string;
   standardType: string | null;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
+  abstract?: string | null;
+  keywords?: string | null;
+  url?: string | null;
+  filePath?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
 }
 
 interface Tag {
@@ -89,7 +100,109 @@ export default function PapersPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 全文检索（接 /api/papers/fulltext）
+  const [fulltextMode, setFulltextMode] = useState(false);
+  const [fulltextResults, setFulltextResults] = useState<
+    { id: string; title: string; subtitle: string; snippet: string; matchIn: "fulltext" | "meta"; url: string }[]
+  >([]);
+  const [fulltextLoading, setFulltextLoading] = useState(false);
+
   const [showNewModal, setShowNewModal] = useState(false);
+
+  // 批量导入（BibTeX / RIS / EndNote）
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importParsed, setImportParsed] = useState<
+    { title: string; authors: string[]; journal: string | null; year: number | null; volume: string | null; issue: string | null; pages: string | null; doi: string | null; abstract: string | null; url: string | null }[]
+  >([]);
+  const [importSelected, setImportSelected] = useState<Set<number>>(new Set());
+  const [importLoading, setImportLoading] = useState(false);
+  const [importSubmitting, setImportSubmitting] = useState(false);
+  const [importFormat, setImportFormat] = useState("");
+
+  // 批量导入：读取题录文件 → 解析 → 展示 → 勾选导入
+  const handleImportFile = async (file: File) => {
+    setImportLoading(true);
+    setImportParsed([]);
+    try {
+      const text = await file.text();
+      const res = await fetch("/api/papers/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      const list = data.papers || [];
+      setImportParsed(list);
+      setImportFormat(data.format || "");
+      setImportSelected(new Set(list.map((_: unknown, i: number) => i)));
+      if (list.length === 0) toast.error("未解析到有效文献，请检查文件格式");
+    } catch (e) {
+      toast.error("解析失败");
+    }
+    setImportLoading(false);
+  };
+
+  const handleConfirmImport = async () => {
+    const toImport = importParsed.filter((_, i) => importSelected.has(i));
+    if (toImport.length === 0) {
+      toast.error("请至少选择一篇");
+      return;
+    }
+    setImportSubmitting(true);
+    let ok = 0;
+    for (const p of toImport) {
+      try {
+        const res = await fetch("/api/papers/list", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: p.title,
+            authors: p.authors,
+            journal: p.journal,
+            year: p.year,
+            volume: p.volume,
+            issue: p.issue,
+            pages: p.pages,
+            doi: p.doi,
+            abstract: p.abstract,
+            url: p.url,
+          }),
+        });
+        if (res.ok) ok++;
+      } catch {
+        /* 跳过失败项 */
+      }
+    }
+    setImportSubmitting(false);
+    toast.success(`成功导入 ${ok} 篇文献`);
+    setShowImportModal(false);
+    setImportParsed([]);
+    setImportSelected(new Set());
+    loadPapers();
+  };
+
+  // 编辑文献弹窗状态
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingPaperId, setEditingPaperId] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editForm, setEditForm] = useState({
+    title: "",
+    authors: "",
+    journal: "",
+    year: "",
+    volume: "",
+    issue: "",
+    pages: "",
+    doi: "",
+    abstract: "",
+    keywords: "",
+    filePath: "",
+    fileName: "",
+    fileSize: 0,
+  });
+  const [editPdfUploading, setEditPdfUploading] = useState(false);
+  const [editPdfSource, setEditPdfSource] = useState("");
+  const [editFindingPdf, setEditFindingPdf] = useState(false);
   const [newPaperDoi, setNewPaperDoi] = useState("");
   const [doiLoading, setDoiLoading] = useState(false);
   const [manualForm, setManualForm] = useState(false);
@@ -111,6 +224,9 @@ export default function PapersPage() {
     fileSize: 0,
   });
   const [pdfUploading, setPdfUploading] = useState(false);
+  // 自动查找开放获取 PDF
+  const [findingPdf, setFindingPdf] = useState(false);
+  const [pdfSource, setPdfSource] = useState("");
 
   // 标签管理弹窗状态
   const [showTagModal, setShowTagModal] = useState(false);
@@ -139,6 +255,30 @@ export default function PapersPage() {
       }
     };
   }, [searchQuery]);
+
+  // 全文检索：全文模式下按关键词拉取正文命中结果
+  useEffect(() => {
+    if (!fulltextMode || !debouncedSearch.trim()) {
+      setFulltextResults([]);
+      return;
+    }
+    let cancelled = false;
+    setFulltextLoading(true);
+    fetch(`/api/papers/fulltext?q=${encodeURIComponent(debouncedSearch.trim())}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setFulltextResults(d.results || []);
+      })
+      .catch(() => {
+        if (!cancelled) setFulltextResults([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFulltextLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fulltextMode, debouncedSearch]);
 
   // 加载文献
   const loadPapers = useCallback(async () => {
@@ -226,12 +366,133 @@ export default function PapersPage() {
         filePath: data.filePath,
         fileSize: data.fileSize,
       }));
+      setPdfSource("");
       toast.success("PDF 上传成功");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "PDF 上传失败";
       toast.error(msg);
     }
     setPdfUploading(false);
+  };
+
+  // 自动查找开放获取 PDF —— 仅覆盖 arXiv / Europe PMC 等 OA 源，
+  // 订阅制期刊与中文数据库查不到属正常，此时保留手动上传通道。
+  const handleFindPdf = async () => {
+    const doi = (formData.doi || newPaperDoi).trim();
+    const title = formData.title.trim();
+    if (!doi && !title) {
+      toast.error("请先填写 DOI 或标题");
+      return;
+    }
+    setFindingPdf(true);
+    const tid = toast.loading("正在检索开放获取版本…");
+    try {
+      const res = await fetch("/api/papers/find-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doi: doi || undefined, title: title || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "查找失败");
+
+      if (!data.found) {
+        toast.error(data.reason || "未找到开放获取版本", { id: tid, duration: 6000 });
+        setFindingPdf(false);
+        return;
+      }
+
+      setFormData((prev) => ({
+        ...prev,
+        fileName: data.fileName,
+        filePath: data.filePath,
+        fileSize: data.fileSize,
+      }));
+      const SOURCE_LABEL: Record<string, string> = {
+        arxiv: "arXiv",
+        europepmc: "Europe PMC",
+        "semantic-scholar": "Semantic Scholar",
+      };
+      setPdfSource(SOURCE_LABEL[data.source] || data.source);
+      toast.success(
+        `已从 ${SOURCE_LABEL[data.source] || data.source} 获取 PDF（${(data.fileSize / 1024 / 1024).toFixed(1)}MB）`,
+        { id: tid },
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "查找 PDF 失败";
+      toast.error(msg, { id: tid });
+    }
+    setFindingPdf(false);
+  };
+
+  // 编辑弹窗：上传 PDF
+  const handleEditPdfUpload = async (file: File) => {
+    setEditPdfUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      if (!res.ok) throw new Error("上传失败");
+      const data = await res.json();
+      setEditForm((prev) => ({
+        ...prev,
+        fileName: data.fileName,
+        filePath: data.filePath,
+        fileSize: data.fileSize,
+      }));
+      setEditPdfSource("");
+      toast.success("PDF 已更新");
+    } catch {
+      toast.error("PDF 上传失败");
+    }
+    setEditPdfUploading(false);
+  };
+
+  // 编辑弹窗：自动查找 PDF
+  const handleEditFindPdf = async () => {
+    const doi = editForm.doi.trim();
+    const title = editForm.title.trim();
+    if (!doi && !title) {
+      toast.error("请先填写 DOI 或标题");
+      return;
+    }
+    setEditFindingPdf(true);
+    const tid = toast.loading("正在检索开放获取版本…");
+    try {
+      const res = await fetch("/api/papers/find-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doi: doi || undefined, title: title || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "查找失败");
+
+      if (!data.found) {
+        toast.error(data.reason || "未找到开放获取版本", { id: tid, duration: 6000 });
+        setEditFindingPdf(false);
+        return;
+      }
+
+      setEditForm((prev) => ({
+        ...prev,
+        fileName: data.fileName,
+        filePath: data.filePath,
+        fileSize: data.fileSize,
+      }));
+      const SOURCE_LABEL: Record<string, string> = {
+        arxiv: "arXiv",
+        europepmc: "Europe PMC",
+        "semantic-scholar": "Semantic Scholar",
+      };
+      setEditPdfSource(SOURCE_LABEL[data.source] || data.source);
+      toast.success(
+        `已从 ${SOURCE_LABEL[data.source] || data.source} 获取 PDF（${(data.fileSize / 1024 / 1024).toFixed(1)}MB）`,
+        { id: tid },
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "查找 PDF 失败";
+      toast.error(msg, { id: tid });
+    }
+    setEditFindingPdf(false);
   };
 
   // 创建文献
@@ -254,7 +515,17 @@ export default function PapersPage() {
         }),
       });
       if (res.ok) {
-        toast.success("文献添加成功！");
+        const created = await res.json().catch(() => ({}));
+        if (created?.indexedChars > 0) {
+          toast.success(
+            `文献添加成功，已索引全文 ${created.indexedChars.toLocaleString()} 字`,
+          );
+        } else if (formData.filePath) {
+          // 有 PDF 却没索引出内容：多为扫描件（图片型 PDF），需要 OCR
+          toast.success("文献添加成功，但未能提取全文（可能是扫描件）");
+        } else {
+          toast.success("文献添加成功！");
+        }
         setShowNewModal(false);
         resetForm();
         loadPapers();
@@ -295,6 +566,75 @@ export default function PapersPage() {
     setParsedPapers([]);
     setParsedFormat("");
     setFormData({ title: "", authors: "", journal: "", year: "", doi: "", abstract: "", filePath: "", fileName: "", fileSize: 0 });
+    setPdfSource("");
+  };
+
+  // 编辑文献：打开弹窗并预填当前行数据
+  const startRowEdit = (p: Paper) => {
+    const parseArrToStr = (str: string | null | undefined): string => {
+      if (!str) return "";
+      try {
+        return JSON.parse(str).join(", ");
+      } catch {
+        return str;
+      }
+    };
+    setEditForm({
+      title: p.title,
+      authors: parseArrToStr(p.authors),
+      journal: p.journal || "",
+      year: p.year?.toString() || "",
+      volume: p.volume || "",
+      issue: p.issue || "",
+      pages: p.pages || "",
+      doi: p.doi || "",
+      abstract: p.abstract || "",
+      keywords: parseArrToStr(p.keywords),
+      filePath: p.filePath || "",
+      fileName: p.fileName || (p.filePath ? p.filePath.split("/").pop() || "" : ""),
+      fileSize: p.fileSize || 0,
+    });
+    setEditingPaperId(p.id);
+    setEditPdfSource("");
+    setShowEditModal(true);
+  };
+
+  // 编辑文献：保存（复用详情页同款 PUT 逻辑）
+  const handleSaveRowEdit = async () => {
+    if (!editingPaperId) return;
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/papers/${editingPaperId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editForm.title,
+          authors: editForm.authors.split(",").map((s) => s.trim()).filter(Boolean),
+          journal: editForm.journal || null,
+          year: editForm.year ? parseInt(editForm.year) : null,
+          volume: editForm.volume || null,
+          issue: editForm.issue || null,
+          pages: editForm.pages || null,
+          doi: editForm.doi || null,
+          abstract: editForm.abstract || null,
+          keywords: editForm.keywords.split(",").map((s) => s.trim()).filter(Boolean),
+          filePath: editForm.filePath || null,
+          fileName: editForm.fileName || null,
+          fileSize: editForm.fileSize || null,
+        }),
+      });
+      if (res.ok) {
+        toast.success("文献信息已更新");
+        setShowEditModal(false);
+        setEditingPaperId(null);
+        loadPapers();
+      } else {
+        toast.error("保存失败");
+      }
+    } catch (e) {
+      toast.error("保存失败");
+    }
+    setSavingEdit(false);
   };
 
   // 智能题录解析（GB/T 7714 文本 或 BibTeX）
@@ -530,6 +870,18 @@ export default function PapersPage() {
           <Plus className="h-4 w-4" />
           添加文献
         </button>
+        <button
+          onClick={() => {
+            setImportParsed([]);
+            setImportSelected(new Set());
+            setImportFormat("");
+            setShowImportModal(true);
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+        >
+          <FileUp className="h-4 w-4" />
+          批量导入
+        </button>
       </div>
 
       {/* 筛选栏 */}
@@ -556,18 +908,71 @@ export default function PapersPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="搜索文献..."
+            placeholder={fulltextMode ? "搜索文献正文..." : "搜索文献..."}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full h-9 pl-9 pr-4 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full h-9 pl-9 pr-16 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2"
-            >
-              <X className="h-3.5 w-3.5 text-muted-foreground" />
-            </button>
+          {/* 全文模式切换 */}
+          <button
+            onClick={() => setFulltextMode((v) => !v)}
+            title="切换为「搜索正文」模式"
+            className={`absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center px-1.5 h-5 rounded text-[11px] font-medium transition-colors ${
+              fulltextMode
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/70"
+            }`}
+          >
+            全文
+          </button>
+
+          {/* 全文检索结果下拉面板 */}
+          {fulltextMode && debouncedSearch.trim() && (
+            <div className="absolute top-11 left-0 right-0 z-50 rounded-md border bg-popover shadow-lg overflow-hidden max-h-[60vh] overflow-y-auto">
+              {fulltextLoading ? (
+                <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+                  检索正文中...
+                </div>
+              ) : fulltextResults.length === 0 ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">
+                  正文未命中「{debouncedSearch.trim()}」
+                </div>
+              ) : (
+                <ul className="divide-y">
+                  {fulltextResults.map((r) => (
+                    <li key={r.id}>
+                      <Link
+                        href={r.url}
+                        className="block px-3 py-2.5 hover:bg-muted transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium truncate">{r.title}</span>
+                          <span
+                            className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+                              r.matchIn === "fulltext"
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {r.matchIn === "fulltext" ? "正文" : "摘要"}
+                          </span>
+                        </div>
+                        {r.subtitle && (
+                          <p className="text-xs text-muted-foreground truncate mt-0.5">
+                            {r.subtitle}
+                          </p>
+                        )}
+                        {r.snippet && (
+                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                            {r.snippet}
+                          </p>
+                        )}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
 
@@ -781,6 +1186,13 @@ export default function PapersPage() {
                         title="标记已读"
                       >
                         <BookCheck className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => startRowEdit(paper)}
+                        className="p-1 rounded hover:bg-muted text-muted-foreground"
+                        title="编辑"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
                       </button>
                       {paper.doi && (
                         <a
@@ -1025,12 +1437,20 @@ export default function PapersPage() {
                     </label>
                     {formData.fileName ? (
                       <div className="flex items-center gap-2 mt-1 p-2 rounded-lg border bg-green-50 border-green-200">
-                        <FileText className="h-4 w-4 text-green-600" />
+                        <FileText className="h-4 w-4 text-green-600 shrink-0" />
                         <span className="text-xs text-green-700 flex-1 truncate">{formData.fileName}</span>
+                        {pdfSource && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-200 shrink-0">
+                            来自 {pdfSource}
+                          </span>
+                        )}
                         <button
                           type="button"
-                          onClick={() => setFormData({ ...formData, fileName: "", filePath: "", fileSize: 0 })}
-                          className="p-1 rounded hover:bg-green-100"
+                          onClick={() => {
+                            setFormData({ ...formData, fileName: "", filePath: "", fileSize: 0 });
+                            setPdfSource("");
+                          }}
+                          className="p-1 rounded hover:bg-green-100 shrink-0"
                         >
                           <X className="h-3.5 w-3.5 text-green-600" />
                         </button>
@@ -1061,6 +1481,32 @@ export default function PapersPage() {
                         />
                       </label>
                     )}
+
+                    {!formData.fileName && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={handleFindPdf}
+                          disabled={findingPdf || pdfUploading}
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-input text-xs hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {findingPdf ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              检索中，最长约 2 分钟…
+                            </>
+                          ) : (
+                            <>
+                              <Search className="h-3.5 w-3.5" />
+                              按 DOI / 标题自动查找 PDF
+                            </>
+                          )}
+                        </button>
+                        <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+                          仅检索 arXiv、Europe PMC 等开放获取来源；订阅制期刊与中文数据库需手动上传。
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex justify-end gap-2 pt-2">
@@ -1081,6 +1527,226 @@ export default function PapersPage() {
                   </div>
                 </form>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑文献弹窗 */}
+      {showEditModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setShowEditModal(false)}
+        >
+          <div
+            className="bg-background rounded-xl shadow-xl border w-full max-w-lg max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 bg-background z-10">
+              <h3 className="text-base font-semibold">编辑文献</h3>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="p-1 rounded hover:bg-muted text-muted-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-sm font-medium">标题 *</label>
+                <input
+                  value={editForm.title}
+                  onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                  className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium">作者</label>
+                  <input
+                    placeholder="逗号分隔"
+                    value={editForm.authors}
+                    onChange={(e) => setEditForm({ ...editForm, authors: e.target.value })}
+                    className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">期刊</label>
+                  <input
+                    value={editForm.journal}
+                    onChange={(e) => setEditForm({ ...editForm, journal: e.target.value })}
+                    className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <label className="text-sm font-medium">年份</label>
+                  <input
+                    type="number"
+                    value={editForm.year}
+                    onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
+                    className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">卷号</label>
+                  <input
+                    value={editForm.volume}
+                    onChange={(e) => setEditForm({ ...editForm, volume: e.target.value })}
+                    className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">期号</label>
+                  <input
+                    value={editForm.issue}
+                    onChange={(e) => setEditForm({ ...editForm, issue: e.target.value })}
+                    className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">页码</label>
+                  <input
+                    value={editForm.pages}
+                    onChange={(e) => setEditForm({ ...editForm, pages: e.target.value })}
+                    className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">DOI</label>
+                <input
+                  value={editForm.doi}
+                  onChange={(e) => setEditForm({ ...editForm, doi: e.target.value })}
+                  className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">摘要</label>
+                <textarea
+                  rows={5}
+                  value={editForm.abstract}
+                  onChange={(e) => setEditForm({ ...editForm, abstract: e.target.value })}
+                  className="w-full mt-1 px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium">关键词</label>
+                <input
+                  placeholder="逗号分隔"
+                  value={editForm.keywords}
+                  onChange={(e) => setEditForm({ ...editForm, keywords: e.target.value })}
+                  className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+
+              {/* PDF 文件区 */}
+              <div>
+                <label className="text-sm font-medium mb-1 flex items-center gap-1.5">
+                  <FileUp className="h-3.5 w-3.5 text-muted-foreground" />
+                  PDF 文件（可选）
+                </label>
+                {editForm.fileName ? (
+                  <div className="flex items-center gap-2 mt-1 p-2 rounded-lg border bg-green-50 border-green-200">
+                    <FileText className="h-4 w-4 text-green-600 shrink-0" />
+                    <span className="text-xs text-green-700 flex-1 truncate">{editForm.fileName}</span>
+                    {editPdfSource && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-200 shrink-0">
+                        来自 {editPdfSource}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditForm((prev) => ({ ...prev, fileName: "", filePath: "", fileSize: 0 }));
+                        setEditPdfSource("");
+                      }}
+                      className="p-1 rounded hover:bg-green-100 shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5 text-green-600" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex flex-col items-center justify-center mt-1 h-20 rounded-lg border-2 border-dashed border-muted-foreground/25 hover:border-primary/40 hover:bg-muted/30 cursor-pointer transition-colors">
+                    {editPdfUploading ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        上传中...
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                        <Upload className="h-5 w-5" />
+                        <span className="text-xs">点击上传 PDF 或拖拽到此处</span>
+                      </div>
+                    )}
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      className="hidden"
+                      disabled={editPdfUploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleEditPdfUpload(file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
+
+                {!editForm.fileName && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={handleEditFindPdf}
+                      disabled={editFindingPdf || editPdfUploading}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-input text-xs hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {editFindingPdf ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          检索中，最长约 2 分钟…
+                        </>
+                      ) : (
+                        <>
+                          <Search className="h-3.5 w-3.5" />
+                          按 DOI / 标题自动查找 PDF
+                        </>
+                      )}
+                    </button>
+                    <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+                      仅检索 arXiv、Europe PMC 等开放获取来源；订阅制期刊与中文数据库需手动上传。
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowEditModal(false)}
+                  className="px-4 h-9 text-sm rounded-lg border hover:bg-muted transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleSaveRowEdit}
+                  disabled={savingEdit || !editForm.title.trim()}
+                  className="inline-flex items-center gap-1.5 px-4 h-9 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                >
+                  {savingEdit ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  保存
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1252,6 +1918,124 @@ export default function PapersPage() {
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批量导入弹窗 */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg max-h-[85vh] overflow-hidden rounded-xl border bg-card flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h2 className="text-base font-semibold">批量导入文献</h2>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="p-1 rounded hover:bg-muted text-muted-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {importParsed.length === 0 ? (
+                <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-lg py-10 cursor-pointer hover:bg-muted/40 transition-colors">
+                  <FileUp className="h-8 w-8 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    选择 BibTeX / RIS / EndNote 文件
+                  </span>
+                  <span className="text-xs text-muted-foreground/70">
+                    支持 .bib .ris .enw .txt .xml
+                  </span>
+                  <input
+                    type="file"
+                    accept=".bib,.ris,.enw,.txt,.xml,application/x-bibtex,text/plain"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleImportFile(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      解析到 {importParsed.length} 篇（格式：
+                      {importFormat.toUpperCase()}）
+                    </span>
+                    <button
+                      onClick={() =>
+                        setImportSelected(
+                          new Set(importParsed.map((_, i) => i)),
+                        )
+                      }
+                      className="text-xs text-primary hover:underline"
+                    >
+                      全选
+                    </button>
+                  </div>
+                  <ul className="divide-y border rounded-lg max-h-72 overflow-y-auto">
+                    {importParsed.map((p, i) => (
+                      <li key={i} className="flex items-start gap-2 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={importSelected.has(i)}
+                          onChange={(e) => {
+                            const next = new Set(importSelected);
+                            if (e.target.checked) next.add(i);
+                            else next.delete(i);
+                            setImportSelected(next);
+                          }}
+                          className="mt-1"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{p.title}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {(p.authors || []).slice(0, 3).join(", ")}
+                            {p.journal ? ` · ${p.journal}` : ""}
+                            {p.year ? ` (${p.year})` : ""}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    onClick={() => {
+                      setImportParsed([]);
+                      setImportSelected(new Set());
+                      setImportFormat("");
+                    }}
+                    className="text-xs text-muted-foreground hover:underline"
+                  >
+                    重新选择文件
+                  </button>
+                </>
+              )}
+            </div>
+
+            {importParsed.length > 0 && (
+              <div className="flex justify-end gap-2 px-5 py-4 border-t">
+                <button
+                  onClick={() => setShowImportModal(false)}
+                  className="px-4 h-9 text-sm rounded-lg border hover:bg-muted transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleConfirmImport}
+                  disabled={importSubmitting || importSelected.size === 0}
+                  className="inline-flex items-center gap-1.5 px-4 h-9 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                >
+                  {importSubmitting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileUp className="h-4 w-4" />
+                  )}
+                  导入选中（{importSelected.size}）
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

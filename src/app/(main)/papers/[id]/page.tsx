@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -32,6 +32,10 @@ import {
   Highlighter,
   Brain,
   Lightbulb,
+  Sparkles,
+  Languages,
+  Upload,
+  Maximize,
 } from "lucide-react";
 import { formatDate, getStatusColor, getStatusLabel } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -39,6 +43,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import toast from "react-hot-toast";
+import PdfAiPanel from "@/components/PdfAiPanel";
 
 interface PdfAnnotation {
   id: string;
@@ -122,6 +127,8 @@ export default function PaperDetailPage() {
   const [noteContent, setNoteContent] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const [citationContent, setCitationContent] = useState("");
+  const [citationStyles, setCitationStyles] = useState<Record<string, string>>({});
+  const [citationFormat, setCitationFormat] = useState<"gbt7714" | "apa" | "mla" | "bibtex">("gbt7714");
   const [citationLoading, setCitationLoading] = useState(false);
   const [citationCopied, setCitationCopied] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -154,6 +161,24 @@ export default function PaperDetailPage() {
   const [relatedPapers, setRelatedPapers] = useState<RelatedPaper[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(true);
   const [indexing, setIndexing] = useState(false);
+  // PDF 右侧面板页签：批注 / AI 总结 / 翻译
+  const [pdfSideTab, setPdfSideTab] = useState<"annotation" | "summary" | "translate">(
+    "annotation",
+  );
+  // 详情页直接上传 PDF（论文尚未上传时）
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
+  // PDF 全屏预览开关
+  const [pdfFullscreen, setPdfFullscreen] = useState(false);
+  // Esc 退出 PDF 全屏预览
+  useEffect(() => {
+    if (!pdfFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPdfFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pdfFullscreen]);
 
   useEffect(() => {
     loadPaper();
@@ -217,6 +242,40 @@ export default function PaperDetailPage() {
       toast.error("保存失败");
     }
     setSavingEdit(false);
+  };
+
+  // 详情页直接为文献上传 PDF（无 PDF 时显示入口）
+  const handleUploadPdf = async (file: File) => {
+    setUploadingPdf(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const up = await fetch("/api/upload", { method: "POST", body: form });
+      if (!up.ok) {
+        const err = await up.json().catch(() => null);
+        toast.error(err?.error || "上传失败");
+        return;
+      }
+      const data = await up.json();
+      const res = await fetch(`/api/papers/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filePath: data.filePath,
+          fileName: data.fileName,
+          fileSize: data.fileSize,
+        }),
+      });
+      if (res.ok) {
+        toast.success("PDF 已上传");
+        loadPaper();
+      } else {
+        toast.error("PDF 已上传但关联文献失败");
+      }
+    } catch (e) {
+      toast.error("上传失败");
+    }
+    setUploadingPdf(false);
   };
 
   const loadPaper = async () => {
@@ -305,6 +364,9 @@ export default function PaperDetailPage() {
     try {
       const res = await fetch(`/api/papers/${id}/citation`);
       const data = await res.json();
+      if (data.styles) setCitationStyles(data.styles);
+      const fmt = (data.style as "gbt7714") || "gbt7714";
+      setCitationFormat(fmt);
       setCitationContent(data.content);
       await navigator.clipboard.writeText(data.content);
       setCitationCopied(true);
@@ -314,6 +376,22 @@ export default function PaperDetailPage() {
       toast.error("生成引用失败");
     }
     setCitationLoading(false);
+  };
+
+  // 当前选中格式的引用文本
+  const displayedCitation = citationStyles[citationFormat] ?? citationContent;
+
+  const downloadCitation = (text: string, fmt: string) => {
+    const ext = fmt === "bibtex" ? "bib" : "txt";
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `citation.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const loadAnnotations = async () => {
@@ -696,6 +774,33 @@ export default function PaperDetailPage() {
           >
             <Edit3 className="h-4 w-4" />
           </button>
+          {/* 未上传 PDF 时显示上传入口 */}
+          {!paper.filePath && (
+            <button
+              onClick={() => pdfInputRef.current?.click()}
+              disabled={uploadingPdf}
+              className="inline-flex items-center gap-1 px-2.5 h-8 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              title="上传 PDF"
+            >
+              {uploadingPdf ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Upload className="h-3.5 w-3.5" />
+              )}
+              上传 PDF
+            </button>
+          )}
+          <input
+            ref={pdfInputRef}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleUploadPdf(file);
+              e.target.value = "";
+            }}
+          />
           {/* 引用复制 */}
           <button
             onClick={fetchCitation}
@@ -856,22 +961,48 @@ export default function PaperDetailPage() {
 
       {/* 引用格式 */}
       {citationContent && (
-        <div className="rounded-lg border bg-muted/30 p-3 flex items-start gap-2">
-          <Quote className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="text-xs text-muted-foreground mb-1">GB/T 7714 引用格式</p>
-            <p className="text-sm leading-relaxed break-all">{citationContent}</p>
+        <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Quote className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="text-xs text-muted-foreground">引用格式</span>
+            <div className="flex items-center gap-1 ml-auto">
+              {(["gbt7714", "apa", "mla", "bibtex"] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  onClick={() => setCitationFormat(fmt)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    citationFormat === fmt
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/70"
+                  }`}
+                >
+                  {fmt === "gbt7714" ? "GB/T 7714" : fmt.toUpperCase()}
+                </button>
+              ))}
+            </div>
           </div>
-          <button
-            onClick={() => {
-              navigator.clipboard.writeText(citationContent);
-              toast.success("已复制");
-            }}
-            className="p-1 rounded hover:bg-muted text-muted-foreground shrink-0"
-            title="再次复制"
-          >
-            <Copy className="h-3.5 w-3.5" />
-          </button>
+          <p className="text-sm leading-relaxed break-all font-mono">{displayedCitation}</p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(displayedCitation);
+                toast.success("已复制");
+              }}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-muted/70 text-muted-foreground transition-colors"
+              title="复制"
+            >
+              <Copy className="h-3 w-3" />
+              复制
+            </button>
+            <button
+              onClick={() => downloadCitation(displayedCitation, citationFormat)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-muted/70 text-muted-foreground transition-colors"
+              title="下载"
+            >
+              <Download className="h-3 w-3" />
+              下载
+            </button>
+          </div>
         </div>
       )}
 
@@ -940,8 +1071,16 @@ export default function PaperDetailPage() {
           {/* 展开内容 */}
           {showPdfPanel && (
             <div className="border-t flex" style={{ height: 600 }}>
-              {/* 左侧 PDF 预览 60% */}
-              <div className="border-r" style={{ width: "60%" }}>
+              {/* 左侧 PDF 预览 52% */}
+              <div className="border-r relative overflow-hidden group" style={{ width: "52%" }}>
+                <button
+                  onClick={() => setPdfFullscreen(true)}
+                  title="全屏预览"
+                  className="absolute bottom-3 right-3 z-10 inline-flex items-center gap-1.5 px-2.5 h-8 rounded-lg bg-black/40 text-white/85 text-xs font-medium border border-white/15 backdrop-blur-md shadow-lg opacity-90 hover:opacity-100 hover:bg-black/70 hover:text-white hover:scale-[1.04] active:scale-95 transition-all"
+                >
+                  <Maximize className="h-3.5 w-3.5" />
+                  全屏
+                </button>
                 <iframe
                   src={`${paper.filePath}#page=${currentPage}&toolbar=1`}
                   className="w-full h-full"
@@ -949,8 +1088,50 @@ export default function PaperDetailPage() {
                 />
               </div>
 
-              {/* 右侧批注面板 40% */}
-              <div className="flex flex-col" style={{ width: "40%" }}>
+              {/* 右侧面板 48%：批注 / AI 总结 / 翻译 */}
+              <div className="flex flex-col" style={{ width: "48%" }}>
+                {/* 页签切换 */}
+                <div className="flex items-center border-b bg-muted/30">
+                  {(
+                    [
+                      { key: "annotation", label: "批注", icon: MessageSquare },
+                      { key: "summary", label: "AI 总结", icon: Sparkles },
+                      { key: "translate", label: "翻译", icon: Languages },
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t.key}
+                      onClick={() => setPdfSideTab(t.key)}
+                      className={`flex-1 inline-flex items-center justify-center gap-1.5 h-9 text-xs font-medium border-b-2 transition-colors ${
+                        pdfSideTab === t.key
+                          ? "border-primary text-primary bg-background"
+                          : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                      }`}
+                    >
+                      <t.icon className="h-3.5 w-3.5" />
+                      {t.label}
+                      {t.key === "annotation" && annotations.length > 0 && (
+                        <span className="px-1 rounded bg-muted text-[10px] text-muted-foreground">
+                          {annotations.length}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {/* AI 总结 / 翻译面板 */}
+                {pdfSideTab !== "annotation" && (
+                  <PdfAiPanel
+                    key={pdfSideTab}
+                    paperId={paper.id}
+                    paperTitle={paper.title}
+                    mode={pdfSideTab === "summary" ? "summary" : "translate"}
+                  />
+                )}
+
+                {/* 批注面板 */}
+                {pdfSideTab === "annotation" && (
+                <div className="flex flex-col flex-1 min-h-0">
                 {/* 顶部工具栏 */}
                 <div className="flex items-center gap-2 p-3 border-b">
                   <div className="flex items-center gap-1.5">
@@ -1115,9 +1296,46 @@ export default function PaperDetailPage() {
                       ))
                   )}
                 </div>
+                </div>
+                )}
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* PDF 全屏预览 */}
+      {paper.filePath && pdfFullscreen && (
+        <div className="fixed inset-0 z-[100] bg-zinc-950 flex flex-col">
+          {/* 顶部工具栏 */}
+          <div className="flex items-center gap-3 px-4 h-14 bg-gradient-to-r from-zinc-800/95 via-zinc-800/85 to-zinc-900/95 backdrop-blur-md text-white border-b border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.45)] shrink-0">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold bg-gradient-to-r from-white to-zinc-300 bg-clip-text text-transparent">
+              {paper.title}
+            </span>
+            <span className="text-xs text-zinc-300 flex items-center gap-1.5 shrink-0">
+              页码:
+              <input
+                type="number"
+                min={1}
+                value={currentPage}
+                onChange={(e) => setCurrentPage(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-16 h-7 px-2 rounded-md border border-white/15 bg-white/5 text-white text-sm text-center focus:outline-none focus:bg-white/10 focus:border-white/30 transition-colors"
+              />
+            </span>
+            <button
+              onClick={() => setPdfFullscreen(false)}
+              title="退出全屏 (Esc)"
+              className="inline-flex items-center gap-1 px-3 h-7 bg-white/10 border border-white/15 hover:bg-white/20 rounded-md text-xs transition-colors shrink-0"
+            >
+              <X className="h-3.5 w-3.5" />
+              退出
+            </button>
+          </div>
+          <iframe
+            src={`${paper.filePath}#page=${currentPage}&toolbar=1&view=FitH`}
+            className="flex-1 w-full bg-white"
+            title="PDF 全屏预览"
+          />
         </div>
       )}
 

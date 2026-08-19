@@ -104,6 +104,7 @@ export default function DocumentEditorPage() {
   const [showReferences, setShowReferences] = useState(false);
   const [references, setReferences] = useState<ReferenceItem[]>([]);
   const [loadingRefs, setLoadingRefs] = useState(false);
+  const [refStyle, setRefStyle] = useState<"gbt7714" | "apa" | "mla">("gbt7714");
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const saveTimer = useRef<NodeJS.Timeout | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -394,55 +395,115 @@ export default function DocumentEditorPage() {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
-  // ====== 参考文献自动生成 ======
+  // ====== 参考文献自动生成（核心：扫描+取数+生成，返回数组）======
+  const computeReferences = async (): Promise<ReferenceItem[]> => {
+    if (!doc) return [];
+    // 扫描所有章节，提取 [xxx](ref:paperId) 格式引用
+    const paperIds: string[] = [];
+    const seen = new Set<string>();
+    const refRegex = /\[([^\]]*)\]\(ref:([^)]+)\)/g;
+    for (const ch of doc.chapters) {
+      let match;
+      while ((match = refRegex.exec(ch.content)) !== null) {
+        const pid = match[2];
+        if (!seen.has(pid)) {
+          seen.add(pid);
+          paperIds.push(pid);
+        }
+      }
+    }
+    if (paperIds.length === 0) return [];
+
+    // 批量获取文献数据
+    const res = await fetch(`/api/papers/list?ids=${paperIds.join(",")}`);
+    const data = await res.json();
+    const papersMap = new Map<string, Paper>();
+    for (const p of data.papers || []) {
+      papersMap.set(p.id, p);
+    }
+
+    // 按出现顺序生成引用（按面板所选格式）
+    return paperIds
+      .map((pid, i) => {
+        const paper = papersMap.get(pid);
+        if (!paper) return null;
+        const citation =
+          refStyle === "apa"
+            ? generateAPA(paper)
+            : refStyle === "mla"
+              ? generateMLA(paper)
+              : generateGBT7714(paper);
+        return { paperId: pid, index: i + 1, citation, paper };
+      })
+      .filter((r): r is ReferenceItem => r !== null);
+  };
+
   const generateReferences = async () => {
     if (!doc) return;
     setLoadingRefs(true);
     try {
-      // 扫描所有章节，提取 [xxx](ref:paperId) 格式引用
-      const paperIds: string[] = [];
-      const seen = new Set<string>();
-      const refRegex = /\[([^\]]*)\]\(ref:([^)]+)\)/g;
-      for (const ch of doc.chapters) {
-        let match;
-        while ((match = refRegex.exec(ch.content)) !== null) {
-          const pid = match[2];
-          if (!seen.has(pid)) {
-            seen.add(pid);
-            paperIds.push(pid);
-          }
-        }
-      }
-
-      if (paperIds.length === 0) {
-        setReferences([]);
-        toast("未发现引用文献", { icon: "ℹ️" });
-        return;
-      }
-
-      // 批量获取文献数据
-      const res = await fetch(`/api/papers/list?ids=${paperIds.join(",")}`);
-      const data = await res.json();
-      const papersMap = new Map<string, Paper>();
-      for (const p of data.papers || []) {
-        papersMap.set(p.id, p);
-      }
-
-      // 按出现顺序生成引用
-      const refs: ReferenceItem[] = paperIds.map((pid, i) => {
-        const paper = papersMap.get(pid);
-        const citation = paper ? generateGBT7714(paper) : `[文献 ${pid} 未找到]`;
-        return { paperId: pid, index: i + 1, citation, paper: paper as Paper };
-      }).filter((r) => r.paper);
-
+      const refs = await computeReferences();
       setReferences(refs);
-      toast.success(`已生成 ${refs.length} 篇参考文献`);
+      if (refs.length === 0) {
+        toast("未发现引用文献", { icon: "ℹ️" });
+      } else {
+        toast.success(`已生成 ${refs.length} 篇参考文献`);
+      }
     } catch (e) {
       console.error(e);
       toast.error("生成参考文献失败");
     } finally {
       setLoadingRefs(false);
     }
+  };
+
+  // ====== 参考文献导出 ======
+  const downloadText = (content: string, filename: string, mime: string) => {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
+  const exportReferences = async (
+    format: "word" | "bibtex" | "ris" | "endnote",
+  ) => {
+    if (!doc) return;
+    let refs = references;
+    if (refs.length === 0) {
+      refs = await computeReferences();
+      setReferences(refs);
+    }
+    if (refs.length === 0) {
+      toast("未发现引用文献", { icon: "ℹ️" });
+      return;
+    }
+    const safeTitle = (doc.title || "参考文献").replace(/[\\/:*?"<>|]/g, "_");
+    let content = "";
+    let ext = "txt";
+    let mime = "text/plain";
+
+    if (format === "word") {
+      // Word 可粘贴的编号文本表（GB/T 7714）
+      content = refs.map((r, i) => `[${i + 1}] ${generateGBT7714(r.paper)}`).join("\n\n");
+    } else if (format === "bibtex") {
+      content = refs.map((r) => generateBibTeX(r.paper)).join("\n\n");
+      ext = "bib";
+      mime = "application/x-bibtex";
+    } else if (format === "ris") {
+      content = refs.map((r) => generateRIS(r.paper)).join("\n\n");
+      ext = "ris";
+      mime = "application/x-research-info-systems";
+    } else {
+      content = refs.map((r) => generateEndNote(r.paper)).join("\n\n");
+      ext = "txt";
+    }
+
+    downloadText(content, `${safeTitle}-参考文献.${ext}`, mime);
+    toast.success(`已导出 ${refs.length} 条参考文献（${format.toUpperCase()}）`);
   };
 
   // 切换参考文献面板时自动生成
@@ -708,7 +769,14 @@ export default function DocumentEditorPage() {
                     className="fixed inset-0 z-40"
                     onClick={() => setShowMoreMenu(false)}
                   />
-                  <div className="absolute right-0 top-full mt-1 w-40 rounded-lg border bg-background shadow-lg z-50 py-1">
+                  <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border bg-background shadow-lg z-50 py-1">
+                    <button
+                      onClick={() => { exportReferences("word"); setShowMoreMenu(false); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-muted transition-colors"
+                    >
+                      <Download className="h-3.5 w-3.5 text-muted-foreground" />
+                      导出参考文献
+                    </button>
                     <button
                       onClick={() => { exportDocument(); setShowMoreMenu(false); }}
                       className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-muted transition-colors"
@@ -814,6 +882,61 @@ export default function DocumentEditorPage() {
                   </button>
                 </div>
               </div>
+              <div className="flex items-center gap-1 mb-2">
+                {(["gbt7714", "apa", "mla"] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    onClick={() => {
+                      setRefStyle(fmt);
+                      generateReferences();
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                      refStyle === fmt
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/70"
+                    }`}
+                  >
+                    {fmt === "gbt7714" ? "GB/T 7714" : fmt.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+
+              {/* 导出整篇参考文献 */}
+              {references.length > 0 && (
+                <div className="mb-2">
+                  <p className="text-[10px] text-muted-foreground mb-1">导出整篇</p>
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      onClick={() => exportReferences("word")}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                      title="导出为 Word 可粘贴的编号文本表（GB/T 7714）"
+                    >
+                      Word文本
+                    </button>
+                    <button
+                      onClick={() => exportReferences("bibtex")}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                      title="导出为 BibTeX（LaTeX / JabRef / Zotero）"
+                    >
+                      BibTeX
+                    </button>
+                    <button
+                      onClick={() => exportReferences("ris")}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                      title="导出为 RIS（EndNote / NoteExpress / Mendeley）"
+                    >
+                      RIS
+                    </button>
+                    <button
+                      onClick={() => exportReferences("endnote")}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
+                      title="导出为 EndNote 标签格式（.txt 可直接导入）"
+                    >
+                      EndNote
+                    </button>
+                  </div>
+                </div>
+              )}
               {references.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   {loadingRefs ? "生成中..." : "未发现引用文献。在文中使用 [作者, 年份](ref:文献ID) 格式添加引用。"}
@@ -1040,4 +1163,106 @@ function generateGBT7714(paper: Paper): string {
   citation += ".";
 
   return citation;
+}
+
+function parseAuthors(paper: Paper): string[] {
+  try {
+    return JSON.parse(paper.authors);
+  } catch {
+    return paper.authors.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+}
+
+function generateAPA(paper: Paper): string {
+  const authors = parseAuthors(paper);
+  const yr = paper.year ? `(${paper.year}).` : "(n.d.).";
+  let s = (authors.length ? authors.join(", ") + " " : "") + yr + " ";
+  s += `${paper.title}. `;
+  if (paper.journal) s += `${paper.journal}`;
+  if (paper.volume) s += `, ${paper.volume}`;
+  if (paper.issue) s += `(${paper.issue})`;
+  if (paper.pages) s += `, ${paper.pages}`;
+  s += ".";
+  if (paper.doi) s += ` https://doi.org/${paper.doi}`;
+  return s;
+}
+
+function generateMLA(paper: Paper): string {
+  const authors = parseAuthors(paper);
+  let m = authors.length ? authors.join(", ") + ". " : "";
+  m += `"${paper.title}." `;
+  if (paper.journal) m += `${paper.journal}`;
+  if (paper.volume) m += `, vol. ${paper.volume}`;
+  if (paper.issue) m += `, no. ${paper.issue}`;
+  if (paper.year) m += `, ${paper.year}`;
+  if (paper.pages) m += `, pp. ${paper.pages}`;
+  m += ".";
+  if (paper.doi) m += ` DOI: ${paper.doi}.`;
+  return m;
+}
+
+// ====== 导出格式生成器（BibTeX / RIS / EndNote）======
+
+function firstSurnameClient(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return parts[parts.length - 1] || name;
+}
+
+function splitPages(pages: string | null): [string, string] {
+  if (!pages) return ["", ""];
+  const m = pages.split(/[-–—]/);
+  return [m[0]?.trim() || "", m[1]?.trim() || ""];
+}
+
+/** BibTeX @article 条目（LaTeX / JabRef / Zotero / Mendeley） */
+function generateBibTeX(paper: Paper): string {
+  const authors = parseAuthors(paper);
+  const first = authors[0] ? firstSurnameClient(authors[0]) : "ref";
+  const key = `${first}${paper.year || ""}`.replace(/[^a-zA-Z0-9]/g, "");
+  let s = `@article{${key},\n`;
+  s += `  title = {${paper.title}},\n`;
+  if (authors.length) s += `  author = {${authors.join(" and ")}},\n`;
+  if (paper.journal) s += `  journal = {${paper.journal}},\n`;
+  if (paper.year) s += `  year = {${paper.year}},\n`;
+  if (paper.volume) s += `  volume = {${paper.volume}},\n`;
+  if (paper.issue) s += `  number = {${paper.issue}},\n`;
+  if (paper.pages) s += `  pages = {${paper.pages}},\n`;
+  if (paper.doi) s += `  doi = {${paper.doi}}\n`;
+  s += "}";
+  return s;
+}
+
+/** RIS 格式（EndNote / NoteExpress / Mendeley 通用导入） */
+function generateRIS(paper: Paper): string {
+  const authors = parseAuthors(paper);
+  const lines: string[] = [];
+  lines.push(`TY  - ${paper.standardType && paper.standardNumber ? "STANDARD" : "JOUR"}`);
+  for (const a of authors) lines.push(`AU  - ${a}`);
+  lines.push(`TI  - ${paper.title}`);
+  if (paper.journal) lines.push(`JO  - ${paper.journal}`);
+  if (paper.year) lines.push(`PY  - ${paper.year}`);
+  if (paper.volume) lines.push(`VL  - ${paper.volume}`);
+  if (paper.issue) lines.push(`IS  - ${paper.issue}`);
+  const [sp, ep] = splitPages(paper.pages);
+  if (sp) lines.push(`SP  - ${sp}`);
+  if (ep) lines.push(`EP  - ${ep}`);
+  if (paper.doi) lines.push(`DO  - ${paper.doi}`);
+  lines.push(`ER  -`);
+  return lines.join("\n");
+}
+
+/** EndNote 标签格式（.txt 可直接导入 EndNote） */
+function generateEndNote(paper: Paper): string {
+  const authors = parseAuthors(paper);
+  const lines: string[] = [];
+  lines.push(`%0 ${paper.standardType && paper.standardNumber ? "Standard" : "Journal Article"}`);
+  for (const a of authors) lines.push(`%A ${a}`);
+  lines.push(`%T ${paper.title}`);
+  if (paper.journal) lines.push(`%J ${paper.journal}`);
+  if (paper.year) lines.push(`%D ${paper.year}`);
+  if (paper.volume) lines.push(`%V ${paper.volume}`);
+  if (paper.issue) lines.push(`%N ${paper.issue}`);
+  if (paper.pages) lines.push(`%P ${paper.pages}`);
+  if (paper.doi) lines.push(`%M ${paper.doi}`);
+  return lines.join("\n");
 }

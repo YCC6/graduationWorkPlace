@@ -9,6 +9,7 @@ export interface SearchResult {
   url: string;
   highlight: string;
   score: number;
+  matchIn?: "title" | "abstract" | "keywords" | "content";
 }
 
 function truncate(text: string, max = 100): string {
@@ -79,6 +80,13 @@ export async function GET(request: NextRequest) {
             else if (abstractMatch || keywordsMatch) score = 1;
             else if (contentMatch) score = 1;
 
+            // 命中字段：用于前端标记「正文」来源，并决定高亮片段取自何处
+            let matchIn: "title" | "abstract" | "keywords" | "content" | undefined;
+            if (contentMatch) matchIn = "content";
+            else if (abstractMatch) matchIn = "abstract";
+            else if (keywordsMatch) matchIn = "keywords";
+            else if (titleMatch) matchIn = "title";
+
             let authors: string[] = [];
             try {
               authors = r.authors ? JSON.parse(r.authors) : [];
@@ -87,13 +95,20 @@ export async function GET(request: NextRequest) {
             }
             const authorStr = Array.isArray(authors) && authors.length > 0 ? authors.join(", ") : "未知作者";
 
-            const highlight = r.abstract
-              ? extractHighlight(r.abstract, kw)
-              : r.keywords
-                ? extractHighlight(r.keywords, kw)
-                : r.content
-                  ? extractHighlight(r.content, kw)
-                  : r.title;
+            // 高亮片段优先取实际命中的字段（命中正文就显示正文，不再默认摘要）
+            const highlight = matchIn === "content" && r.content
+              ? extractHighlight(r.content, kw)
+              : matchIn === "abstract" && r.abstract
+                ? extractHighlight(r.abstract, kw)
+                : matchIn === "keywords" && r.keywords
+                  ? extractHighlight(r.keywords, kw)
+                  : matchIn === "title"
+                    ? extractHighlight(r.title, kw)
+                    : r.abstract
+                      ? extractHighlight(r.abstract, kw)
+                      : r.content
+                        ? extractHighlight(r.content, kw)
+                        : r.title;
 
             return {
               type: "paper" as const,
@@ -103,6 +118,7 @@ export async function GET(request: NextRequest) {
               url: `/papers/${r.id}`,
               highlight,
               score,
+              matchIn,
             };
           }),
         ),

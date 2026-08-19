@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>文献剪藏</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="hd">
+      <div class="hd__title">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+        </svg>
+        <span>文献剪藏</span>
+      </div>
+      <button id="btn-options" class="hd__link" type="button" title="设置">设置</button>
+    </header>
+
+    <!-- 服务状态条 -->
+    <div id="status" class="status status--checking">
+      <span class="status__dot"></span>
+      <span id="status-text">正在连接工作台…</span>
+    </div>
+
+    <!-- 加载中 -->
+    <div id="loading" class="empty">
+      <div class="spinner"></div>
+      <p>正在解析当前页面…</p>
+    </div>
+
+    <!-- 解析失败 -->
+    <div id="nodata" class="empty hidden">
+      <p class="empty__title">未能识别论文信息</p>
+      <p class="empty__hint">
+        请打开论文的<strong>详情页</strong>后重试。<br />
+        若仍失败，可在下方手动填写标题与 DOI。
+      </p>
+      <button id="btn-manual" class="btn btn--ghost" type="button">手动填写</button>
+    </div>
+
+    <!-- 单篇预览 -->
+    <main id="form" class="form hidden">
+      <div class="badge-row">
+        <span id="adapter-badge" class="badge">通用解析</span>
+        <span id="dup-badge" class="badge badge--warn hidden">库中已有</span>
+      </div>
+
+      <label class="field">
+        <span class="field__label">标题 <em>*</em></span>
+        <textarea id="f-title" rows="2" placeholder="论文标题"></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field__label">作者</span>
+        <input id="f-authors" type="text" placeholder="多位作者用逗号分隔" />
+      </label>
+
+      <div class="field-row">
+        <label class="field field--grow">
+          <span class="field__label">期刊 / 来源</span>
+          <input id="f-journal" type="text" placeholder="期刊名" />
+        </label>
+        <label class="field field--year">
+          <span class="field__label">年份</span>
+          <input id="f-year" type="text" inputmode="numeric" placeholder="2024" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field__label">DOI</span>
+        <input id="f-doi" type="text" placeholder="10.xxxx/xxxxx" />
+      </label>
+
+      <details class="more">
+        <summary>更多字段</summary>
+        <div class="field-row">
+          <label class="field"><span class="field__label">卷</span><input id="f-volume" type="text" /></label>
+          <label class="field"><span class="field__label">期</span><input id="f-issue" type="text" /></label>
+          <label class="field"><span class="field__label">页码</span><input id="f-pages" type="text" /></label>
+        </div>
+        <label class="field">
+          <span class="field__label">关键词</span>
+          <input id="f-keywords" type="text" placeholder="用逗号分隔" />
+        </label>
+        <label class="field">
+          <span class="field__label">摘要</span>
+          <textarea id="f-abstract" rows="4" placeholder="摘要"></textarea>
+        </label>
+      </details>
+    </main>
+
+    <!-- Google Scholar 列表模式 -->
+    <main id="list" class="list hidden">
+      <div class="list__head">
+        <span id="list-count">检测到多条结果</span>
+        <button id="btn-selectall" class="hd__link" type="button">全选</button>
+      </div>
+      <div id="list-items" class="list__items"></div>
+    </main>
+
+    <footer class="ft">
+      <span id="ft-hint" class="ft__hint"></span>
+      <button id="btn-save" class="btn btn--primary" type="button" disabled>
+        存入文献库
+      </button>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

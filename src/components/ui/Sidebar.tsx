@@ -8,11 +8,13 @@ export function SidebarNavItem({
   icon: Icon,
   label,
   badge,
+  collapsed,
 }: {
   href: string;
   icon: LucideIcon;
   label: string;
   badge?: number;
+  collapsed?: boolean;
 }) {
   const pathname = usePathname();
   const isActive = pathname === href || pathname.startsWith(href + "/");
@@ -20,8 +22,10 @@ export function SidebarNavItem({
   return (
     <Link
       href={href}
+      title={collapsed ? label : undefined}
       className={cn(
         "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors",
+        collapsed && "justify-center px-0",
         "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         isActive
           ? "bg-sidebar-accent text-sidebar-primary font-medium"
@@ -29,8 +33,8 @@ export function SidebarNavItem({
       )}
     >
       <Icon className="h-4 w-4 shrink-0" />
-      <span className="flex-1 truncate">{label}</span>
-      {badge !== undefined && badge > 0 && (
+      {!collapsed && <span className="flex-1 truncate">{label}</span>}
+      {!collapsed && badge !== undefined && badge > 0 && (
         <span className="ml-auto inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 text-[10px] font-medium rounded-full bg-primary text-primary-foreground">
           {badge}
         </span>
@@ -42,13 +46,15 @@ export function SidebarNavItem({
 export function SidebarSection({
   title,
   children,
+  collapsed,
 }: {
   title?: string;
   children: React.ReactNode;
+  collapsed?: boolean;
 }) {
   return (
     <div className="px-3 py-2">
-      {title && (
+      {title && !collapsed && (
         <h2 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </h2>
@@ -60,11 +66,18 @@ export function SidebarSection({
 
 export function Sidebar({
   children,
+  collapsed,
 }: {
   children: React.ReactNode;
+  collapsed?: boolean;
 }) {
   return (
-    <aside className="fixed left-0 top-0 z-40 h-screen w-56 border-r border-sidebar-border bg-sidebar flex flex-col">
+    <aside
+      className={cn(
+        "fixed left-0 top-0 z-40 h-screen border-r border-sidebar-border bg-sidebar flex flex-col transition-[width] duration-200",
+        collapsed ? "w-16" : "w-56"
+      )}
+    >
       {children}
     </aside>
   );

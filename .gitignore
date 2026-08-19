@@ -39,3 +39,19 @@ coverage/
 
 # 部署
 .vercel
+
+# 临时调试/测试产物（开发过程产生的脚本与日志，勿入库）
+_checkjsp.cjs
+_cite_test.cjs
+_cite_test.mjs
+_clean.js
+_parse_test.cjs
+_pdfparse_test.cjs
+_probe.py
+_sum_test.txt
+_sum_test2.txt
+.sse-test.txt
+.sse-tr.txt
+.devlog2.txt
+*.bak
+prisma/*.db.bak*

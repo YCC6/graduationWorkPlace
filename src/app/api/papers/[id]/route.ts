@@ -40,6 +40,7 @@ export async function PUT(
       "title", "journal", "year", "volume", "issue", "pages",
       "doi", "abstract", "url", "status", "rating",
       "standardType", "standardNumber",
+      "filePath", "fileName", "fileSize",
     ];
 
     for (const field of fields) {

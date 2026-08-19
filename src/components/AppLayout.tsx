@@ -11,6 +11,7 @@ import {
   CheckSquare,
   FileText,
   CalendarDays,
+  Bookmark,
   Settings,
   Search,
   Beaker,
@@ -26,6 +27,8 @@ import {
   SidebarNavItem,
   SidebarSection,
 } from "@/components/ui/Sidebar";
+import { SidebarProvider, useSidebar } from "@/components/ui/SidebarContext";
+import { cn } from "@/lib/utils";
 
 type Counts = { papers?: number; projects?: number; tasks?: number };
 
@@ -36,6 +39,7 @@ type SearchResultItem = {
   subtitle: string;
   url: string;
   highlight: string;
+  matchIn?: "title" | "abstract" | "keywords" | "content";
 };
 
 const TYPE_CONFIG: Record<
@@ -68,6 +72,15 @@ function HighlightText({ text, keyword }: { text: string; keyword: string }) {
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <SidebarProvider>
+      <AppLayoutInner>{children}</AppLayoutInner>
+    </SidebarProvider>
+  );
+}
+
+function AppLayoutInner({ children }: { children: React.ReactNode }) {
+  const { collapsed, toggle } = useSidebar();
   const pathname = usePathname();
   const router = useRouter();
   const isHomePage = pathname === "/";
@@ -212,6 +225,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         { href: "/tasks", icon: CheckSquare, label: "任务中心", badge: counts.tasks },
         { href: "/calendar", icon: CalendarDays, label: "日历", badge: undefined },
         { href: "/writing", icon: FileText, label: "写作工坊" },
+        { href: "/clipper", icon: Bookmark, label: "文献剪藏" },
         { href: "/settings", icon: Settings, label: "设置" },
       ],
     },
@@ -222,19 +236,30 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       {/* 侧边栏 */}
-      <Sidebar>
+      <Sidebar collapsed={collapsed}>
         <SidebarHeader>
-          <Link href="/" className="flex items-center gap-2.5 text-sm font-semibold text-sidebar-foreground">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary">
+          <div className="flex items-center gap-2 w-full">
+            <button
+              onClick={toggle}
+              title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+              className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary shrink-0 hover:bg-primary/90 transition-colors"
+            >
               <Beaker className="h-4 w-4 text-primary-foreground" />
-            </div>
-            GradWorkbench
-          </Link>
+            </button>
+            {!collapsed && (
+              <Link
+                href="/"
+                className="flex items-center gap-2.5 text-sm font-semibold text-sidebar-foreground"
+              >
+                GradWorkbench
+              </Link>
+            )}
+          </div>
         </SidebarHeader>
 
         <SidebarContent>
           {navItems.map((group) => (
-            <SidebarSection key={group.section} title={group.section}>
+            <SidebarSection key={group.section} title={group.section} collapsed={collapsed}>
               {group.items.map((item) => (
                 <SidebarNavItem
                   key={item.href}
@@ -242,6 +267,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   icon={item.icon}
                   label={item.label}
                   badge={item.badge}
+                  collapsed={collapsed}
                 />
               ))}
             </SidebarSection>
@@ -249,15 +275,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </SidebarContent>
 
         <SidebarFooter>
-          <div className="text-[11px] text-muted-foreground px-3">
-            <p>环境科学方向 · 研究生工作台</p>
-            <p className="mt-0.5">Phase 4 · 写作工坊</p>
-          </div>
+          {!collapsed && (
+            <div className="text-[11px] text-muted-foreground px-3">
+              <p>环境科学方向 · 研究生工作台</p>
+              <p className="mt-0.5">Phase 4 · 写作工坊</p>
+            </div>
+          )}
         </SidebarFooter>
       </Sidebar>
 
       {/* 主内容区 */}
-      <div className="ml-56 flex-1 flex flex-col min-h-screen">
+      <div
+        className={cn(
+          "flex-1 flex flex-col min-h-screen transition-[margin] duration-200",
+          collapsed ? "ml-16" : "ml-56"
+        )}
+      >
         {/* 顶部栏 */}
         <header className="sticky top-0 z-30 h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center px-6 gap-4">
           <div className="relative flex-1 max-w-lg">
@@ -335,8 +368,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                                   >
                                     <Icon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
                                     <div className="flex-1 min-w-0">
-                                      <div className="font-medium truncate">
+                                      <div className="font-medium truncate flex items-center gap-1.5">
                                         {item.title}
+                                        {item.type === "paper" && item.matchIn === "content" && (
+                                          <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-normal">
+                                            正文
+                                          </span>
+                                        )}
+                                        {item.type === "paper" && item.matchIn === "abstract" && (
+                                          <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-normal">
+                                            摘要
+                                          </span>
+                                        )}
                                       </div>
                                       <div className="text-xs text-muted-foreground truncate">
                                         {item.subtitle}
