@@ -55,3 +55,8 @@ _sum_test2.txt
 .devlog2.txt
 *.bak
 prisma/*.db.bak*
+
+# npm 安装缓存 / 临时目录（沙箱中避让安全删除保护用，不入库）
+.npmcache/
+.npmtmp/
+update_next_lock.mjs
