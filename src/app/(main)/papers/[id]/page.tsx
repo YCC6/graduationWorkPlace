@@ -36,6 +36,7 @@ import {
   Languages,
   Upload,
   Maximize,
+  MessagesSquare,
 } from "lucide-react";
 import { formatDate, getStatusColor, getStatusLabel } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -44,6 +45,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import toast from "react-hot-toast";
 import PdfAiPanel from "@/components/PdfAiPanel";
+import PdfAiChat from "@/components/PdfAiChat";
 
 interface PdfAnnotation {
   id: string;
@@ -161,10 +163,10 @@ export default function PaperDetailPage() {
   const [relatedPapers, setRelatedPapers] = useState<RelatedPaper[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(true);
   const [indexing, setIndexing] = useState(false);
-  // PDF 右侧面板页签：批注 / AI 总结 / 翻译
-  const [pdfSideTab, setPdfSideTab] = useState<"annotation" | "summary" | "translate">(
-    "annotation",
-  );
+  // PDF 右侧面板页签：批注 / AI 总结 / 翻译 / 对话
+  const [pdfSideTab, setPdfSideTab] = useState<
+    "annotation" | "summary" | "translate" | "chat"
+  >("annotation");
   // 详情页直接上传 PDF（论文尚未上传时）
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
@@ -611,7 +613,7 @@ export default function PaperDetailPage() {
   const keywords = parseArr(paper.keywords);
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="p-6 space-y-6 max-w-6xl">
       {/* 返回 */}
       <Link
         href="/papers"
@@ -1097,6 +1099,7 @@ export default function PaperDetailPage() {
                       { key: "annotation", label: "批注", icon: MessageSquare },
                       { key: "summary", label: "AI 总结", icon: Sparkles },
                       { key: "translate", label: "翻译", icon: Languages },
+                      { key: "chat", label: "对话", icon: MessagesSquare },
                     ] as const
                   ).map((t) => (
                     <button
@@ -1119,8 +1122,17 @@ export default function PaperDetailPage() {
                   ))}
                 </div>
 
+                {/* 对话面板 */}
+                {pdfSideTab === "chat" && (
+                  <PdfAiChat
+                    paperId={paper.id}
+                    paperTitle={paper.title}
+                    onNoteSaved={() => loadRelatedNotes()}
+                  />
+                )}
+
                 {/* AI 总结 / 翻译面板 */}
-                {pdfSideTab !== "annotation" && (
+                {(pdfSideTab === "summary" || pdfSideTab === "translate") && (
                   <PdfAiPanel
                     key={pdfSideTab}
                     paperId={paper.id}

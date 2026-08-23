@@ -432,3 +432,129 @@ export const TRANSLATE_SYSTEM_PROMPT = `你是一位专业的学术论文翻译�
 4. 保留原文的段落划分。数学公式、化学式、变量名、单位、图表编号（如 Fig. 1、Table 2）一律保持原样不译。
 5. 参考文献条目、作者姓名、期刊名不翻译。
 6. 直接输出译文正文，不要写"以下是译文"之类的开场白，也不要重复英文原文。`;
+
+// ---------- 文献对话 ----------
+
+/** 普通对话模式的系统提示词 */
+export const CHAT_SYSTEM_PROMPT = `你是一位专业的「文献对话助手」，服务对象是中文母语的研究生。
+用户正在阅读下面这篇论文，并会就它向你提问。请基于给定论文内容作答：
+
+1. 只依据给定的论文内容回答，不要编造论文中不存在的数据、结论或参考文献。
+2. 若论文内容不足以回答，明确说明"原文未提供足够信息"，并在你自行推断处标注"（推断）"。
+3. 保留专业术语的英文原词，首次出现时给出中文译名。
+4. 回答要具体，尽量引用论文中的细节（方法名、关键数据、图表、结论原文）。
+5. 语言精炼、有条理，避免"本文认为""综上所述"这类空话；用户用中文提问就用中文回答。`;
+
+/** 深度思考模式的系统提示词：引导分步推理 + 输出可见思考过程 */
+export const CHAT_SYSTEM_PROMPT_DEEP = `你是一位专业的「文献对话助手」，服务对象是中文母语的研究生。
+用户正在阅读下面这篇论文，并会就它向你提问。请基于给定论文内容作答，并务必进行深度思考。
+
+【深度思考要求】
+在给出最终回答之前，先逐步拆解问题：
+- 厘清用户真正想问什么，识别其中的隐含假设与可能歧义。
+- 在论文中多位置检索证据，交叉验证，而非只看单一段落。
+- 考虑可能的反例、边界条件与作者未明言的局限。
+- 将上述思考整理为一段「🔍 思考过程」，放在最终回答之前；可长可短，但要真实体现你的推理，而不是客套话。
+- 最终回答要具体、可引用论文细节，并明确区分"论文明确说了什么"与"你的推断"。
+
+【作答约束】
+1. 只依据给定的论文内容回答，不要编造论文中不存在的数据、结论或参考文献。
+2. 若论文内容不足以回答，明确说明"原文未提供足够信息"，并在推断处标注"（推断）"。
+3. 保留专业术语的英文原词，首次出现时给出中文译名。
+4. 语言精炼、有条理；用户用中文提问就用中文回答。`;
+
+export type StreamEvent =
+  | { kind: "reasoning"; delta: string }
+  | { kind: "content"; delta: string }
+  | { kind: "done" };
+
+/**
+ * 与 chatStream 类似，但额外捕获推理内容（reasoning_content）。
+ * 当服务商提供原生推理链（如 DeepSeek-Reasoner）时，推理过程会作为
+ * reasoning 事件先行吐出；普通模型该字段为空，只会触发 content 事件。
+ */
+export async function* chatStreamEvents(
+  cfg: AiConfig,
+  messages: ChatMessage[],
+  opts: ChatOptions = {},
+): AsyncGenerator<StreamEvent, void, unknown> {
+  const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: buildHeaders(cfg),
+    body: JSON.stringify({
+      model: cfg.model,
+      messages,
+      temperature: opts.temperature ?? 0.3,
+      ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+      stream: true,
+    }),
+    signal: opts.signal,
+  });
+
+  if (!res.ok) {
+    throw new AiUpstreamError(await readErrorMessage(res), res.status);
+  }
+  if (!res.body) throw new AiUpstreamError("上游未返回响应流", 502);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split("\n");
+      buffer = parts.pop() ?? "";
+
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === "[DONE]") {
+          yield { kind: "done" };
+          return;
+        }
+        try {
+          const json = JSON.parse(payload);
+          const delta = json?.choices?.[0]?.delta ?? {};
+          const reasoning: string = delta?.reasoning_content ?? "";
+          const content: string = delta?.content ?? "";
+          if (reasoning) yield { kind: "reasoning", delta: reasoning };
+          if (content) yield { kind: "content", delta: content };
+        } catch {
+          /* 个别服务商会插入非 JSON 的心跳行，忽略即可 */
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * 深度思考时选择实际调用的模型：
+ * - DeepSeek 且为 deepseek-chat 时切换为 deepseek-reasoner（原生推理链）。
+ * - 其他服务商没有原生推理模型，保持原模型，由增强版系统提示词引导分步推理。
+ */
+export function resolveChatModel(
+  cfg: AiConfig,
+  deepThink: boolean,
+): AiConfig {
+  if (!deepThink) return cfg;
+  const isDeepseek =
+    cfg.provider === "deepseek" ||
+    cfg.baseUrl.toLowerCase().includes("deepseek");
+  if (!isDeepseek) return cfg;
+  let model = cfg.model;
+  if (model.includes("reasoner")) {
+    // 已经是指推理模型，保持不变
+  } else if (model.includes("chat")) {
+    model = model.replace("chat", "reasoner");
+  } else {
+    model = "deepseek-reasoner";
+  }
+  return { ...cfg, model };
+}
