@@ -12,6 +12,50 @@ export interface ParsedPaper {
   abstract: string | null;
   url: string | null;
   raw: string; // 原始题录行，便于前端展示
+  docType?: string | null; // GB/T 7714 文献类型: J|M|D|R|S|N|C|P|EB/OL|Z
+  pubInfo?: PubInfo | null; // 出版社/出版地/学位单位等
+}
+
+// 文献类型归一化：把 [J]/[M]… 标记或条目类型映射为规范类型码
+export type PubInfo = {
+  publisher?: string | null;
+  publishPlace?: string | null;
+  institution?: string | null;
+  degree?: string | null;
+  version?: string | null;
+  newspaper?: string | null;
+  date?: string | null;
+  updateDate?: string | null;
+  citeDate?: string | null;
+  patentCountry?: string | null;
+  patentNumber?: string | null;
+  publicDate?: string | null;
+};
+
+const DOC_TYPE_ALIASES: Record<string, string> = {
+  J: "J",
+  M: "M",
+  D: "D",
+  R: "R",
+  S: "S",
+  N: "N",
+  C: "C",
+  P: "P",
+  G: "Z", // 资料
+  K: "Z", // 参考工具书
+  Z: "Z",
+  DB: "DB",
+  CP: "CP",
+  EB: "EB/OL",
+  OL: "EB/OL",
+  "EB/OL": "EB/OL",
+  "EB/OL]": "EB/OL",
+};
+
+function normalizeDocType(raw: string | null | undefined): string {
+  if (!raw) return "J";
+  const key = raw.replace(/[[\]]/g, "").trim().toUpperCase();
+  return DOC_TYPE_ALIASES[key] || "J";
 }
 
 // ====== BibTeX 解析 ======
@@ -119,6 +163,30 @@ function parseBibtexEntry(entry: string): ParsedPaper | null {
   const doi = fields.doi || null;
   const url = fields.url || (doi ? `https://doi.org/${doi}` : null);
 
+  // 由 BibTeX 条目类型推断 GB/T 7714 文献类型
+  const entryTypeMatch = entry.match(/@([a-zA-Z]+)\s*{/);
+  const entryType = (entryTypeMatch ? entryTypeMatch[1] : "article").toLowerCase();
+  const BIB_DOC_TYPE: Record<string, string> = {
+    article: "J", book: "M", inbook: "M", booklet: "M", incollection: "C",
+    inproceedings: "C", conference: "C", phdthesis: "D", mastersthesis: "D",
+    thesis: "D", techreport: "R", manual: "R", report: "R", standard: "S",
+    patent: "P", electronic: "EB/OL", online: "EB/OL", misc: "Z", unpublished: "Z",
+  };
+  let docType = BIB_DOC_TYPE[entryType] || "J";
+  if (entryType === "misc" && (fields.url || fields.doi)) docType = "EB/OL";
+
+  const pubInfo: PubInfo = {};
+  if (fields.publisher) pubInfo.publisher = fields.publisher;
+  if (fields.address) pubInfo.publishPlace = fields.address;
+  if (fields.school || fields.institution) {
+    pubInfo.institution = fields.school || fields.institution;
+  }
+  if (fields.number) pubInfo.patentNumber = fields.number;
+  if (docType === "EB/OL") {
+    pubInfo.updateDate = fields.year ? fields.year.replace(/[^0-9]/g, "").slice(0, 4) : null;
+  }
+  const hasPubInfo = Object.values(pubInfo).some((v) => v);
+
   return {
     title,
     authors,
@@ -131,10 +199,38 @@ function parseBibtexEntry(entry: string): ParsedPaper | null {
     abstract: fields.abstract || null,
     url,
     raw: entry.trim(),
+    docType,
+    pubInfo: hasPubInfo ? pubInfo : null,
   };
 }
 
 // ====== GB/T 7714 解析 ======
+
+// RIS / EndNote 文献类型 → GB/T 7714 类型码
+function risDocType(ty: string): string {
+  const t = (ty || "").toUpperCase().trim();
+  const MAP: Record<string, string> = {
+    JOUR: "J", JOURNAL: "J", BOOK: "M", BOOKT: "M", THES: "D", RPRT: "R",
+    STD: "S", NEWS: "N", CPAPER: "C", CONF: "C", ELEC: "EB/OL", PAT: "P",
+    SER: "J", UNPB: "R", MISC: "Z", MAP: "Z",
+  };
+  return MAP[t] || "J";
+}
+
+function endNoteDocType(t0: string): string {
+  const t = (t0 || "").toLowerCase();
+  if (/journal/.test(t)) return "J";
+  if (/thesis|dissertation/.test(t)) return "D";
+  if (/report/.test(t)) return "R";
+  if (/standard/.test(t)) return "S";
+  if (/news|newspaper/.test(t)) return "N";
+  if (/patent/.test(t)) return "P";
+  if (/conference|proceedings|paper/.test(t)) return "C";
+  if (/electronic|web|webpage|web page|blog/.test(t)) return "EB/OL";
+  if (/book/.test(t)) return "M";
+  if (/program|software/.test(t)) return "CP";
+  return "Z";
+}
 
 function extractDoi(text: string): string | null {
   // 优先匹配标准 DOI 格式 10.xxxx/...（允许内部含点号）
@@ -150,11 +246,14 @@ function parseGBT7714Line(line: string): ParsedPaper | null {
   let text = line.replace(/^\[\d+\]\.?\s*/, "").trim();
   if (!text) return null;
 
-  const typeIdx = text.search(/\[[A-Za-z]+\]/);
+  const typeIdx = text.search(/\[[A-Za-z/]+\]/);
   if (typeIdx < 0) return null;
 
   const head = text.slice(0, typeIdx); // "作者. 标题"
   const tail = text.slice(typeIdx); // "[J]. 期刊, 年, 卷(期): 页."
+
+  const markerMatch = tail.match(/\[([^\]]+)\]/);
+  const docType = normalizeDocType(markerMatch ? markerMatch[1] : "J");
 
   const dotIdx = head.indexOf(". ");
   let authorsStr = "";
@@ -172,29 +271,81 @@ function parseGBT7714Line(line: string): ParsedPaper | null {
     .map((a) => a.trim())
     .filter(Boolean);
 
-  const tailContent = tail.replace(/^\[[A-Za-z]+\]\.\s*/, "");
-  const m = tailContent.match(
-    /^(.*?),\s*(\d{4})(?:[,\s]+(\d+)\s*(?:\((\d+)\))?)?(?:\s*[:：]\s*([\d\-–—]+))?/
-  );
+  const tailContent = tail.replace(/^\[[A-Za-z/]+\]\.\s*/, "");
+  const pubInfo: PubInfo = {};
 
   let journal: string | null = null;
   let year: number | null = null;
   let volume: string | null = null;
   let issue: string | null = null;
   let pages: string | null = null;
+  let parsedUrl: string | null = null;
 
-  if (m) {
-    journal = m[1]?.trim() || null;
-    year = parseInt(m[2]) || null;
-    volume = m[3] || null;
-    issue = m[4] || null;
-    pages = m[5] || null;
+  if (docType === "J") {
+    const m = tailContent.match(
+      /^(.*?),\s*(\d{4})(?:[,\s]+(\d+)\s*(?:\((\d+)\))?)?(?:\s*[:：]\s*([\d\-–—]+))?/
+    );
+    if (m) {
+      journal = m[1]?.trim() || null;
+      year = parseInt(m[2]) || null;
+      volume = m[3] || null;
+      issue = m[4] || null;
+      pages = m[5] || null;
+    } else {
+      const ym = tailContent.match(/(\d{4})/);
+      if (ym) year = parseInt(ym[1]);
+    }
+  } else if (docType === "N") {
+    // 报纸文章：报纸名, 出版日期(版次).
+    const n = tailContent.match(/^(.*?),\s*([\d-]+)(?:\((\d+)\))?/);
+    if (n) {
+      journal = n[1]?.trim() || null;
+      pubInfo.newspaper = journal;
+      pubInfo.date = n[2] || null;
+      year = parseInt(n[2].slice(0, 4)) || null;
+      pubInfo.version = n[3] || null;
+    } else {
+      const ym = tailContent.match(/(\d{4})/);
+      if (ym) year = parseInt(ym[1]);
+    }
+  } else if (docType === "EB/OL") {
+    // 电子资源: (更新日期) [引用日期]. 获取和访问路径.
+    const upd = tailContent.match(/\(([\d-]+)\)/);
+    if (upd) pubInfo.updateDate = upd[1] || null;
+    const cite = tailContent.match(/\[([\d-]+)\]/);
+    if (cite) pubInfo.citeDate = cite[1] || null;
+    const urlM = tailContent.match(/https?:\/\/\S+/);
+    if (urlM) parsedUrl = urlM[0].replace(/[.。。]+$/, "");
+    const refYear = pubInfo.updateDate || pubInfo.citeDate;
+    if (refYear) year = parseInt(refYear.slice(0, 4)) || null;
   } else {
-    // 退路：仅提取年份
-    const ym = tailContent.match(/(\d{4})/);
-    if (ym) year = parseInt(ym[1]);
+    // M/C/R/S/D/P/Z 等：抽取 出版地: 出版者, 年
+    const pubMatch = tailContent.match(/([^,，:：]+?)[:：]\s*([^,，]+?)\s*,\s*(\d{4})/);
+    if (pubMatch) {
+      const place = pubMatch[1].trim();
+      const publisher = pubMatch[2].trim();
+      year = parseInt(pubMatch[3]) || null;
+      if (docType === "D") {
+        pubInfo.publishPlace = place || null;
+        pubInfo.institution = publisher || null;
+      } else {
+        pubInfo.publishPlace = place || null;
+        pubInfo.publisher = publisher || null;
+      }
+    } else {
+      const ym = tailContent.match(/([^,，]+?)\s*,\s*(\d{4})/);
+      if (ym) {
+        year = parseInt(ym[2]) || null;
+        if (docType === "D") pubInfo.institution = ym[1].trim();
+        else pubInfo.publisher = ym[1].trim();
+      } else {
+        const y2 = tailContent.match(/(\d{4})/);
+        if (y2) year = parseInt(y2[1]);
+      }
+    }
   }
 
+  const hasPubInfo = Object.values(pubInfo).some((v) => v);
   return {
     title,
     authors,
@@ -205,8 +356,10 @@ function parseGBT7714Line(line: string): ParsedPaper | null {
     pages,
     doi: extractDoi(text),
     abstract: null,
-    url: null,
+    url: parsedUrl,
     raw: line.trim(),
+    docType,
+    pubInfo: hasPubInfo ? pubInfo : null,
   };
 }
 
@@ -242,6 +395,16 @@ function parseRIS(raw: string): ParsedPaper[] {
       const tag = m[1].toUpperCase();
       const val = m[2].trim();
       switch (tag) {
+        case "TY":
+        case "PT":
+          fields.docType = risDocType(val);
+          break;
+        case "PB":
+          fields.publisher = val;
+          break;
+        case "CY":
+          fields.publishPlace = val;
+          break;
         case "TI":
         case "T1":
           title = val;
@@ -293,6 +456,11 @@ function parseRIS(raw: string): ParsedPaper[] {
       : null;
     const pages = sp ? (ep ? `${sp}-${ep}` : sp) : ep || null;
 
+    const risPub: PubInfo = {};
+    if (fields.publisher) risPub.publisher = fields.publisher;
+    if (fields.publishPlace) risPub.publishPlace = fields.publishPlace;
+    const risHasPub = Object.values(risPub).some((v) => v);
+
     papers.push({
       title,
       authors,
@@ -305,6 +473,8 @@ function parseRIS(raw: string): ParsedPaper[] {
       abstract: abstract || null,
       url: fields.url || (fields.doi ? `https://doi.org/${fields.doi}` : null),
       raw: block,
+      docType: fields.docType || "J",
+      pubInfo: risHasPub ? risPub : null,
     });
   }
   return papers;
@@ -332,6 +502,15 @@ function parseEndNote(raw: string): ParsedPaper[] {
       const tag = m[1].toUpperCase();
       const val = m[2].trim();
       switch (tag) {
+        case "0":
+          fields.docType = endNoteDocType(val);
+          break;
+        case "I":
+          fields.publisher = val;
+          break;
+        case "C":
+          fields.publishPlace = val;
+          break;
         case "T":
         case "T1":
           title = val;
@@ -377,6 +556,11 @@ function parseEndNote(raw: string): ParsedPaper[] {
       ? parseInt(fields.year.replace(/[^0-9]/g, "").slice(0, 4)) || null
       : null;
 
+    const enPub: PubInfo = {};
+    if (fields.publisher) enPub.publisher = fields.publisher;
+    if (fields.publishPlace) enPub.publishPlace = fields.publishPlace;
+    const enHasPub = Object.values(enPub).some((v) => v);
+
     papers.push({
       title,
       authors,
@@ -389,6 +573,8 @@ function parseEndNote(raw: string): ParsedPaper[] {
       abstract: abstract || null,
       url: fields.url || (fields.doi ? `https://doi.org/${fields.doi}` : null),
       raw: block,
+      docType: fields.docType || "J",
+      pubInfo: enHasPub ? enPub : null,
     });
   }
   return papers;

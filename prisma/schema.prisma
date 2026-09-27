@@ -37,10 +37,15 @@ model Paper {
   experimentRefs ExperimentRef[]
   projectPapers ProjectPaper[]
   pdfAnnotations PdfAnnotation[]
+  chatMessages  ChatMessage[]
 
   // 环境科学特有字段
   standardType   String? // GB | HJ | EPA | ISO | null
   standardNumber String? // 标准号，如 "GB/T 5750.3-2023"
+
+  // GB/T 7714 文献类型与出版信息（规范化引用所需）
+  docType String? // 文献类型码: J|M|D|R|S|N|C|P|DB|CP|EB/OL|Z，默认期刊[J]
+  pubInfo String? // JSON: { publisher, publishPlace, institution, degree, version, updateDate, citeDate }
 
   // ====== AI 阅读辅助（结果落库缓存，避免重复调用付费接口）======
   aiSummary          String?   // AI 结构化总结（Markdown）
@@ -232,6 +237,27 @@ model Task {
   project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
 }
 
+// ====== 课程表（导入课表，日历周视图）======
+
+model Course {
+  id           String   @id @default(uuid())
+  name         String   // 课程名（含班级，如"新时代中国特色社会主义理论与实践4班"）
+  teacher      String?  // 教师
+  room         String?  // 教室，如 "5102"
+  weeks        String?  // 原始周次文本，如 "1-8周"
+  startWeek    Int?     // 起始周，如 1
+  endWeek      Int?     // 结束周，如 8
+  dayOfWeek    Int      // 1=周一 ... 7=周日
+  sectionStart Int      // 起始节次，如 1
+  sectionEnd   Int      // 结束节次，如 2
+  period       String?  // 上午 / 下午 / 晚上
+  semesterStart DateTime? // 第1周周一的日期，用于推算具体日历日期
+  semesterEnd   DateTime? // 学期结束日期（可选，用于范围约束）
+  color        String   @default("#7C3AED")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 // ====== 写作中心 ======
 
 model Document {
@@ -334,4 +360,21 @@ model AppSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// ====== 文献 AI 对话记录（持久化到数据库，支持多设备同步）======
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  paperId   String
+  role      String   // "user" | "assistant"
+  content   String   // 文本内容
+  reasoning String?  // 深度思考的推理过程（仅 assistant）
+  images    String?  // JSON 数组，仅存文件名 [{name}]，不存 data URL 以免体积膨胀
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  paper     Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@index([paperId, createdAt])
 }

@@ -37,8 +37,10 @@ import {
   Upload,
   Maximize,
   MessagesSquare,
+  ScanText,
 } from "lucide-react";
-import { formatDate, getStatusColor, getStatusLabel } from "@/lib/utils";
+import { cn, formatDate, getStatusColor, getStatusLabel } from "@/lib/utils";
+import { useSidebar } from "@/components/ui/SidebarContext";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -46,6 +48,7 @@ import rehypeKatex from "rehype-katex";
 import toast from "react-hot-toast";
 import PdfAiPanel from "@/components/PdfAiPanel";
 import PdfAiChat from "@/components/PdfAiChat";
+import PdfAiSpeedRead from "@/components/PdfAiSpeedRead";
 
 interface PdfAnnotation {
   id: string;
@@ -99,6 +102,8 @@ interface PaperDetail {
   rating: number | null;
   standardType: string | null;
   standardNumber: string | null;
+  docType: string | null;
+  pubInfo: string | null;
   filePath: string | null;
   fileName: string | null;
   fileSize: number | null;
@@ -122,6 +127,7 @@ interface PaperDetail {
 export default function PaperDetailPage() {
   const { id } = useParams();
   const router = useRouter();
+  const { collapsed } = useSidebar();
   const [paper, setPaper] = useState<PaperDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -145,6 +151,10 @@ export default function PaperDetailPage() {
     doi: "",
     abstract: "",
     keywords: "",
+    docType: "J",
+    publisher: "",
+    publishPlace: "",
+    institution: "",
   });
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
   const [showPdfPanel, setShowPdfPanel] = useState(false);
@@ -165,11 +175,28 @@ export default function PaperDetailPage() {
   const [indexing, setIndexing] = useState(false);
   // PDF 右侧面板页签：批注 / AI 总结 / 翻译 / 对话
   const [pdfSideTab, setPdfSideTab] = useState<
-    "annotation" | "summary" | "translate" | "chat"
+    "annotation" | "summary" | "translate" | "speedread" | "chat"
   >("annotation");
   // 详情页直接上传 PDF（论文尚未上传时）
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
+  // 同源 PDF viewer 的 iframe 引用（用于跳转页码，避免整页重载）
+  const pdfIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const pdfFullscreenIframeRef = useRef<HTMLIFrameElement | null>(null);
+  // 页码变化 → 通知同源 viewer 滚动到对应页（不重载 PDF）
+  useEffect(() => {
+    const post = (el: HTMLIFrameElement | null) => {
+      if (el?.contentWindow) {
+        try {
+          el.contentWindow.postMessage({ type: "goto", page: currentPage }, "*");
+        } catch {
+          /* 跨域或尚未就绪，忽略 */
+        }
+      }
+    };
+    post(pdfIframeRef.current);
+    post(pdfFullscreenIframeRef.current);
+  }, [currentPage]);
   // PDF 全屏预览开关
   const [pdfFullscreen, setPdfFullscreen] = useState(false);
   // Esc 退出 PDF 全屏预览
@@ -199,6 +226,14 @@ export default function PaperDetailPage() {
         return str;
       }
     };
+    let pub: { publisher?: string; publishPlace?: string; institution?: string } = {};
+    if (paper.pubInfo) {
+      try {
+        pub = JSON.parse(paper.pubInfo);
+      } catch {
+        pub = {};
+      }
+    }
     setEditForm({
       title: paper.title,
       authors: parseArrToStr(paper.authors),
@@ -210,6 +245,10 @@ export default function PaperDetailPage() {
       doi: paper.doi || "",
       abstract: paper.abstract || "",
       keywords: parseArrToStr(paper.keywords),
+      docType: paper.docType || "J",
+      publisher: pub.publisher || "",
+      publishPlace: pub.publishPlace || "",
+      institution: pub.institution || "",
     });
     setEditing(true);
   };
@@ -231,6 +270,15 @@ export default function PaperDetailPage() {
           doi: editForm.doi || null,
           abstract: editForm.abstract || null,
           keywords: editForm.keywords.split(",").map((s) => s.trim()).filter(Boolean),
+          docType: editForm.docType || "J",
+          pubInfo:
+            editForm.publisher || editForm.publishPlace || editForm.institution
+              ? JSON.stringify({
+                  publisher: editForm.publisher || null,
+                  publishPlace: editForm.publishPlace || null,
+                  institution: editForm.institution || null,
+                })
+              : null,
         }),
       });
       if (res.ok) {
@@ -613,7 +661,7 @@ export default function PaperDetailPage() {
   const keywords = parseArr(paper.keywords);
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl">
+    <div className={cn("p-6 space-y-6", collapsed ? "max-w-none" : "max-w-6xl")}>
       {/* 返回 */}
       <Link
         href="/papers"
@@ -656,14 +704,67 @@ export default function PaperDetailPage() {
               />
             </div>
             <div>
-              <label className="text-sm font-medium">期刊</label>
+              <label className="text-sm font-medium">文献类型（GB/T 7714）</label>
+              <select
+                value={editForm.docType}
+                onChange={(e) => setEditForm({ ...editForm, docType: e.target.value })}
+                className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="J">期刊文章 [J]</option>
+                <option value="M">专著 [M]</option>
+                <option value="D">学位论文 [D]</option>
+                <option value="R">报告 [R]</option>
+                <option value="S">标准 [S]</option>
+                <option value="N">报纸文章 [N]</option>
+                <option value="C">论文集 [C]</option>
+                <option value="P">专利 [P]</option>
+                <option value="EB/OL">电子资源 [EB/OL]</option>
+                <option value="Z">其他 [Z]</option>
+              </select>
+            </div>
+          </div>
+
+          {editForm.docType !== "J" && editForm.docType !== "N" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium">
+                  {editForm.docType === "D" ? "学位授予单位" : "出版者"}
+                </label>
+                <input
+                  value={editForm.docType === "D" ? editForm.institution : editForm.publisher}
+                  onChange={(e) =>
+                    setEditForm(
+                      editForm.docType === "D"
+                        ? { ...editForm, institution: e.target.value }
+                        : { ...editForm, publisher: e.target.value }
+                    )
+                  }
+                  className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">出版地</label>
+                <input
+                  value={editForm.publishPlace}
+                  onChange={(e) => setEditForm({ ...editForm, publishPlace: e.target.value })}
+                  className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+            </div>
+          )}
+
+          {(editForm.docType === "J" || editForm.docType === "N") && (
+            <div>
+              <label className="text-sm font-medium">
+                {editForm.docType === "N" ? "报纸名" : "期刊"}
+              </label>
               <input
                 value={editForm.journal}
                 onChange={(e) => setEditForm({ ...editForm, journal: e.target.value })}
                 className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
-          </div>
+          )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
@@ -1073,8 +1174,11 @@ export default function PaperDetailPage() {
           {/* 展开内容 */}
           {showPdfPanel && (
             <div className="border-t flex" style={{ height: 600 }}>
-              {/* 左侧 PDF 预览 52% */}
-              <div className="border-r relative overflow-hidden group" style={{ width: "52%" }}>
+              {/* 左侧 PDF 预览：展开态 52%，收起侧栏时让出更多空间给右侧面板 */}
+              <div
+                className="border-r relative overflow-hidden group transition-[width] duration-300 ease-out"
+                style={{ width: collapsed ? "44%" : "52%" }}
+              >
                 <button
                   onClick={() => setPdfFullscreen(true)}
                   title="全屏预览"
@@ -1084,14 +1188,18 @@ export default function PaperDetailPage() {
                   全屏
                 </button>
                 <iframe
-                  src={`${paper.filePath}#page=${currentPage}&toolbar=1`}
+                  ref={pdfIframeRef}
+                  src={`/pdfjs_new/viewer.html?file=${encodeURIComponent(paper.filePath)}&page=${currentPage}`}
                   className="w-full h-full"
                   title="PDF 预览"
                 />
               </div>
 
-              {/* 右侧面板 48%：批注 / AI 总结 / 翻译 */}
-              <div className="flex flex-col" style={{ width: "48%" }}>
+              {/* 右侧面板：批注 / AI 总结 / 翻译 / 对话。收起侧栏时占比增至 56% */}
+              <div
+                className="flex flex-col transition-[width] duration-300 ease-out"
+                style={{ width: collapsed ? "56%" : "48%" }}
+              >
                 {/* 页签切换 */}
                 <div className="flex items-center border-b bg-muted/30">
                   {(
@@ -1099,6 +1207,7 @@ export default function PaperDetailPage() {
                       { key: "annotation", label: "批注", icon: MessageSquare },
                       { key: "summary", label: "AI 总结", icon: Sparkles },
                       { key: "translate", label: "翻译", icon: Languages },
+                      { key: "speedread", label: "速读", icon: ScanText },
                       { key: "chat", label: "对话", icon: MessagesSquare },
                     ] as const
                   ).map((t) => (
@@ -1125,6 +1234,16 @@ export default function PaperDetailPage() {
                 {/* 对话面板 */}
                 {pdfSideTab === "chat" && (
                   <PdfAiChat
+                    paperId={paper.id}
+                    paperTitle={paper.title}
+                    onNoteSaved={() => loadRelatedNotes()}
+                  />
+                )}
+
+                {/* 一键速读面板 */}
+                {pdfSideTab === "speedread" && (
+                  <PdfAiSpeedRead
+                    key={paper.id}
                     paperId={paper.id}
                     paperTitle={paper.title}
                     onNoteSaved={() => loadRelatedNotes()}
@@ -1344,7 +1463,8 @@ export default function PaperDetailPage() {
             </button>
           </div>
           <iframe
-            src={`${paper.filePath}#page=${currentPage}&toolbar=1&view=FitH`}
+            ref={pdfFullscreenIframeRef}
+            src={`/pdfjs_new/viewer.html?file=${encodeURIComponent(paper.filePath)}&page=${currentPage}`}
             className="flex-1 w-full bg-white"
             title="PDF 全屏预览"
           />

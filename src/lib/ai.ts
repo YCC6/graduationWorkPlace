@@ -153,9 +153,14 @@ export async function requireAiConfig(): Promise<AiConfig> {
 
 // ---------- 文本处理 ----------
 
+/** 多模态消息片段：文本 或 图片（OpenAI 兼容协议的 vision 格式） */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
 
 /**

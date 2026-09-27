@@ -39,14 +39,39 @@ export async function GET() {
       id: string;
       title: string;
       date: string; // YYYY-MM-DD
-      type: "task" | "milestone" | "project-start" | "project-end";
+      type: "task" | "milestone" | "project-start" | "project-end" | "course";
       priority?: string;
       status?: string;
       completed?: boolean;
       projectId?: string;
       projectName?: string;
+      subtitle?: string;
+      teacher?: string;
       url: string;
     }> = [];
+
+    // 课程：按周次生成每周发生事件
+    const courses = await prisma.course.findMany();
+    for (const c of courses) {
+      const sem = c.semesterStart;
+      if (!sem) continue;
+      const sw = c.startWeek ?? 1;
+      const ew = c.endWeek ?? 18;
+      for (let w = sw; w <= ew; w++) {
+        const d = new Date(sem);
+        d.setDate(d.getDate() + (w - 1) * 7 + (c.dayOfWeek - 1));
+        const dateStr = d.toISOString().slice(0, 10);
+        events.push({
+          id: `course-${c.id}-${w}`,
+          title: c.name,
+          date: dateStr,
+          type: "course",
+          subtitle: `${c.period ?? ""} ${c.sectionStart}-${c.sectionEnd}节${c.room ? " @ " + c.room : ""}`,
+          teacher: c.teacher ?? undefined,
+          url: "/calendar",
+        });
+      }
+    }
 
     for (const t of tasks) {
       if (t.dueDate) {

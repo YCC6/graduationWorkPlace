@@ -98,6 +98,8 @@ export async function POST(request: NextRequest) {
         rating: body.rating || null,
         standardType: body.standardType || null,
         standardNumber: body.standardNumber || null,
+        docType: body.docType || "J",
+        pubInfo: body.pubInfo || null,
       },
     });
 

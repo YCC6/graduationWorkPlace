@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF 阅读器</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #525659; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      #app { display: flex; flex-direction: column; height: 100%; }
+      #toolbar {
+        display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+        background: #2a2a2e; color: #e8e8e8; font-size: 13px; flex: 0 0 auto;
+        box-shadow: 0 1px 4px rgba(0,0,0,.4); z-index: 5;
+      }
+      #toolbar button {
+        background: #3c3c41; color: #e8e8e8; border: none; border-radius: 5px;
+        padding: 4px 9px; cursor: pointer; font-size: 13px; line-height: 1;
+      }
+      #toolbar button:hover { background: #505057; }
+      #toolbar .sep { width: 1px; height: 18px; background: #4a4a4f; margin: 0 2px; }
+      #toolbar .info { margin-left: auto; opacity: .8; font-variant-numeric: tabular-nums; }
+      #container { flex: 1 1 auto; overflow: auto; padding: 12px; }
+      #pages { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+      .page { position: relative; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+      .page canvas { display: block; }
+      .textLayer {
+        position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+        overflow: hidden; opacity: 0.2; line-height: 1; text-size-adjust: none;
+        forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 2;
+      }
+      .textLayer :is(span, br) {
+        color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%;
+      }
+      .textLayer ::selection { background: rgba(40, 110, 220, .28); }
+      #status {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: #ddd; font-size: 14px; background: #525659;
+      }
+      #status.error { color: #ff8a8a; padding: 0 24px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="toolbar">
+        <button id="zoomOut" title="缩小">−</button>
+        <span id="zoomLabel" style="min-width:46px;text-align:center">120%</span>
+        <button id="zoomIn" title="放大">＋</button>
+        <span class="sep"></span>
+        <button id="prev" title="上一页">↑</button>
+        <button id="next" title="下一页">↓</button>
+        <span class="info" id="pageInfo">加载中…</span>
+      </div>
+      <div id="container">
+        <div id="pages"></div>
+      </div>
+      <div id="status">正在加载 PDF…</div>
+    </div>
+
+    <script src="/pdfjs_new/build/pdf.js"></script>
+    <script>
+      (function () {
+        const pdfjsLib = window.pdfjsLib;
+        if (!pdfjsLib) {
+          setStatus("PDF 引擎加载失败", true);
+          return;
+        }
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdfjs_new/build/pdf.worker.js";
+
+        const params = new URLSearchParams(location.search);
+        const fileUrl = params.get("file");
+        const initialPage = Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+
+        const container = document.getElementById("container");
+        const pagesEl = document.getElementById("pages");
+        const statusEl = document.getElementById("status");
+        const pageInfo = document.getElementById("pageInfo");
+        const zoomLabel = document.getElementById("zoomLabel");
+
+        let pdf = null;
+        let numPages = 0;
+        let scale = 1.2;
+        let currentPage = initialPage;
+
+        function setStatus(msg, isError) {
+          statusEl.style.display = "flex";
+          statusEl.textContent = msg;
+          statusEl.className = isError ? "error" : "";
+        }
+        function hideStatus() { statusEl.style.display = "none"; }
+
+        if (!fileUrl) {
+          setStatus("缺少 file 参数", true);
+          return;
+        }
+
+        zoomLabel.textContent = Math.round(scale * 100) + "%";
+
+        function renderAll() {
+          pagesEl.innerHTML = "";
+          for (let n = 1; n <= numPages; n++) {
+            const pageWrap = document.createElement("div");
+            pageWrap.className = "page";
+            pageWrap.dataset.page = n;
+            pagesEl.appendChild(pageWrap);
+            renderPage(n, pageWrap);
+          }
+          pageInfo.textContent = "共 " + numPages + " 页";
+          scrollToPage(currentPage);
+        }
+
+        async function renderPage(n, pageWrap) {
+          try {
+            const page = await pdf.getPage(n);
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.floor(viewport.width);
+            canvas.height = Math.floor(viewport.height);
+            canvas.style.width = viewport.width + "px";
+            canvas.style.height = viewport.height + "px";
+            pageWrap.style.width = viewport.width + "px";
+            pageWrap.style.height = viewport.height + "px";
+            pageWrap.appendChild(canvas);
+            const ctx = canvas.getContext("2d");
+            await page.render({ canvasContext: ctx, viewport }).promise;
+
+            const textContent = await page.getTextContent();
+            const textLayer = document.createElement("div");
+            textLayer.className = "textLayer";
+            pageWrap.appendChild(textLayer);
+            const task = pdfjsLib.renderTextLayer({
+              textContentSource: textContent,
+              container: textLayer,
+              viewport,
+            });
+            await task.promise;
+          } catch (e) {
+            pageWrap.innerHTML = '<div style="padding:8px;color:#c33">第 ' + n + ' 页渲染失败</div>';
+          }
+        }
+
+        function scrollToPage(n) {
+          n = Math.min(numPages, Math.max(1, n));
+          currentPage = n;
+          pageInfo.textContent = "第 " + n + " / " + numPages + " 页";
+          const el = pagesEl.querySelector('[data-page="' + n + '"]');
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+
+        document.getElementById("zoomIn").onclick = function () {
+          scale = Math.min(3, +(scale + 0.15).toFixed(2));
+          zoomLabel.textContent = Math.round(scale * 100) + "%";
+          if (pdf) renderAll();
+        };
+        document.getElementById("zoomOut").onclick = function () {
+          scale = Math.max(0.6, +(scale - 0.15).toFixed(2));
+          zoomLabel.textContent = Math.round(scale * 100) + "%";
+          if (pdf) renderAll();
+        };
+        document.getElementById("prev").onclick = function () { scrollToPage(currentPage - 1); };
+        document.getElementById("next").onclick = function () { scrollToPage(currentPage + 1); };
+
+        // 父页面通过 postMessage 跳转页码，避免整页重载
+        window.addEventListener("message", function (e) {
+          if (e.data && e.data.type === "goto" && typeof e.data.page === "number") {
+            scrollToPage(e.data.page);
+          }
+        });
+
+        setStatus("正在加载 PDF…");
+        pdfjsLib
+          .getDocument({ url: fileUrl })
+          .promise.then(function (p) {
+            pdf = p;
+            numPages = p.numPages;
+            hideStatus();
+            renderAll();
+          })
+          .catch(function (err) {
+            setStatus("PDF 加载失败：" + (err && err.message ? err.message : "请检查文件或网络"), true);
+          });
+      })();
+    </script>
+  </body>
+</html>

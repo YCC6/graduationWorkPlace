@@ -1,0 +1,13 @@
+# 反向代理 + 访问密码（Basic Auth）
+# 生成密码哈希（在服务器上执行）：
+#   docker run --rm caddy:2-alpine caddy hash-password --plaintext '你的密码'
+# 把输出整行替换到下面 admin 后面（$ 开头那一串）。
+# 注意：Caddy v2.8+ 用 basic_auth；若报未知指令，改成 basicauth。
+
+:8080 {
+	basic_auth {
+		admin $2a$14$REPLACE_WITH_HASH_FROM__caddy_hash-password
+	}
+
+	reverse_proxy app:3000
+}

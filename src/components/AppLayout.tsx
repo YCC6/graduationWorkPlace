@@ -11,12 +11,17 @@ import {
   CheckSquare,
   FileText,
   CalendarDays,
+  GraduationCap,
   Bookmark,
   Settings,
   Search,
   Beaker,
+  ChevronsLeft,
+  ChevronsRight,
   GitBranch,
   Loader2,
+  Sun,
+  Moon,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -28,6 +33,8 @@ import {
   SidebarSection,
 } from "@/components/ui/Sidebar";
 import { SidebarProvider, useSidebar } from "@/components/ui/SidebarContext";
+import { useTheme } from "@/components/ThemeProvider";
+import SelectionTranslator from "@/components/SelectionTranslator";
 import { cn } from "@/lib/utils";
 
 type Counts = { papers?: number; projects?: number; tasks?: number };
@@ -81,6 +88,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { collapsed, toggle } = useSidebar();
+  const { theme, toggleTheme } = useTheme();
   const pathname = usePathname();
   const router = useRouter();
   const isHomePage = pathname === "/";
@@ -224,6 +232,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       items: [
         { href: "/tasks", icon: CheckSquare, label: "任务中心", badge: counts.tasks },
         { href: "/calendar", icon: CalendarDays, label: "日历", badge: undefined },
+        { href: "/courses", icon: GraduationCap, label: "课程表", badge: undefined },
         { href: "/writing", icon: FileText, label: "写作工坊" },
         { href: "/clipper", icon: Bookmark, label: "文献剪藏" },
         { href: "/settings", icon: Settings, label: "设置" },
@@ -238,19 +247,24 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* 侧边栏 */}
       <Sidebar collapsed={collapsed}>
         <SidebarHeader>
-          <div className="flex items-center gap-2 w-full">
+          <div className="flex items-center gap-2 w-full min-w-0">
             <button
               onClick={toggle}
               title={collapsed ? "展开侧边栏" : "收起侧边栏"}
-              className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary shrink-0 hover:bg-primary/90 transition-colors"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-sidebar-accent transition-colors"
             >
-              <Beaker className="h-4 w-4 text-primary-foreground" />
+              {collapsed ? (
+                <ChevronsRight className="h-4 w-4" />
+              ) : (
+                <ChevronsLeft className="h-4 w-4" />
+              )}
             </button>
             {!collapsed && (
               <Link
                 href="/"
-                className="flex items-center gap-2.5 text-sm font-semibold text-sidebar-foreground"
+                className="flex items-center gap-2 text-sm font-semibold text-sidebar-foreground truncate"
               >
+                <Beaker className="h-4 w-4 text-primary shrink-0" />
                 GradWorkbench
               </Link>
             )}
@@ -293,6 +307,17 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       >
         {/* 顶部栏 */}
         <header className="sticky top-0 z-30 h-14 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center px-6 gap-4">
+          <button
+            onClick={toggle}
+            title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border hover:bg-muted transition-colors"
+          >
+            {collapsed ? (
+              <ChevronsRight className="h-4 w-4" />
+            ) : (
+              <ChevronsLeft className="h-4 w-4" />
+            )}
+          </button>
           <div className="relative flex-1 max-w-lg">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
@@ -406,9 +431,22 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
               </>
             )}
           </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span className="h-2 w-2 rounded-full bg-green-500" />
-            学习中
+          <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+            <button
+              onClick={toggleTheme}
+              title={theme === "dark" ? "切换到亮色模式" : "切换到暗色模式"}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border hover:bg-muted transition-colors"
+            >
+              {theme === "dark" ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </button>
+            <span className="hidden sm:flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-green-500" />
+              学习中
+            </span>
           </div>
         </header>
 
@@ -416,6 +454,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         <main className="flex-1 overflow-y-auto">
           {children}
         </main>
+
+        {/* 全局划词翻译浮层（选中文本即出现「翻译」按钮） */}
+        <SelectionTranslator />
       </div>
     </div>
   );

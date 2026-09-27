@@ -71,7 +71,31 @@ interface ParsedPaper {
   abstract: string | null;
   url: string | null;
   raw: string;
+  docType?: string | null;
+  pubInfo?: PubInfo | null;
 }
+
+// 与解析器 PubInfo 对齐（仅前端编辑用，结构从简）
+type PubInfo = {
+  publisher?: string | null;
+  publishPlace?: string | null;
+  institution?: string | null;
+  [k: string]: string | null | undefined;
+};
+
+// GB/T 7714 文献类型下拉选项
+const DOC_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "J", label: "期刊文章 [J]" },
+  { value: "M", label: "专著 [M]" },
+  { value: "D", label: "学位论文 [D]" },
+  { value: "R", label: "报告 [R]" },
+  { value: "S", label: "标准 [S]" },
+  { value: "N", label: "报纸文章 [N]" },
+  { value: "C", label: "论文集 [C]" },
+  { value: "P", label: "专利 [P]" },
+  { value: "EB/OL", label: "电子资源 [EB/OL]" },
+  { value: "Z", label: "其他 [Z]" },
+];
 
 const STATUS_FILTERS = [
   { value: "all", label: "全部" },
@@ -112,7 +136,7 @@ export default function PapersPage() {
   // 批量导入（BibTeX / RIS / EndNote）
   const [showImportModal, setShowImportModal] = useState(false);
   const [importParsed, setImportParsed] = useState<
-    { title: string; authors: string[]; journal: string | null; year: number | null; volume: string | null; issue: string | null; pages: string | null; doi: string | null; abstract: string | null; url: string | null }[]
+    { title: string; authors: string[]; journal: string | null; year: number | null; volume: string | null; issue: string | null; pages: string | null; doi: string | null; abstract: string | null; url: string | null; docType?: string | null; pubInfo?: PubInfo | null }[]
   >([]);
   const [importSelected, setImportSelected] = useState<Set<number>>(new Set());
   const [importLoading, setImportLoading] = useState(false);
@@ -166,6 +190,8 @@ export default function PapersPage() {
             doi: p.doi,
             abstract: p.abstract,
             url: p.url,
+            docType: p.docType || "J",
+            pubInfo: p.pubInfo || null,
           }),
         });
         if (res.ok) ok++;
@@ -222,6 +248,10 @@ export default function PapersPage() {
     filePath: "",
     fileName: "",
     fileSize: 0,
+    docType: "J",
+    publisher: "",
+    publishPlace: "",
+    institution: "",
   });
   const [pdfUploading, setPdfUploading] = useState(false);
   // 自动查找开放获取 PDF
@@ -240,6 +270,102 @@ export default function PapersPage() {
   // 批量操作状态
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchLoading, setBatchLoading] = useState(false);
+
+  // 批量导入 PDF：读取 PDF → 解析元数据 → 预览/编辑 → 勾选导入
+  const [showPdfModal, setShowPdfModal] = useState(false);
+  const [pdfItems, setPdfItems] = useState<
+    Array<{
+      originalName: string;
+      fileName: string;
+      filePath: string;
+      fileSize: number;
+      title: string | null;
+      authors: string[];
+      journal: string | null;
+      year: number | null;
+      volume: string | null;
+      issue: string | null;
+      pages: string | null;
+      doi: string | null;
+      abstract: string | null;
+      error: string | null;
+    }>
+  >([]);
+  const [pdfSelected, setPdfSelected] = useState<Set<number>>(new Set());
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfSubmitting, setPdfSubmitting] = useState(false);
+
+  const handleImportPdf = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setPdfLoading(true);
+    setPdfItems([]);
+    try {
+      const fd = new FormData();
+      Array.from(files).forEach((f) => fd.append("files", f));
+      const res = await fetch("/api/papers/import-pdf", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        toast.error(data.error || "PDF 解析失败");
+        return;
+      }
+      const list = data.items || [];
+      setPdfItems(list);
+      setPdfSelected(new Set(list.map((_: unknown, i: number) => i)));
+      if (list.length === 0) toast.error("未识别到有效 PDF");
+    } catch {
+      toast.error("上传或解析出错");
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
+  const handleConfirmPdfImport = async () => {
+    const toImport = pdfItems.filter((_, i) => pdfSelected.has(i));
+    if (toImport.length === 0) {
+      toast.error("请至少选择一篇");
+      return;
+    }
+    setPdfSubmitting(true);
+    let ok = 0;
+    let dup = 0;
+    for (const p of toImport) {
+      try {
+        const res = await fetch("/api/papers/list", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: p.title || p.originalName,
+          authors: (p.authors || []).map((a) => a.trim()).filter(Boolean),
+          journal: p.journal,
+          year: p.year ? Number(p.year) : null,
+          volume: p.volume,
+          issue: p.issue,
+          pages: p.pages,
+          doi: p.doi,
+          abstract: p.abstract,
+          filePath: p.filePath,
+          fileName: p.originalName,
+          fileSize: p.fileSize,
+          docType: "J",
+          pubInfo: null,
+        }),
+        });
+        if (res.ok) ok++;
+        else {
+          const d = await res.json().catch(() => ({}));
+          if (/unique|doi/i.test(d.error || "")) dup++;
+        }
+      } catch {
+        /* 跳过失败项 */
+      }
+    }
+    setPdfSubmitting(false);
+    toast.success(`成功导入 ${ok} 篇${dup ? `，${dup} 篇因 DOI 重复跳过` : ""}`);
+    setShowPdfModal(false);
+    setPdfItems([]);
+    setPdfSelected(new Set());
+    loadPapers();
+  };
 
   // 搜索防抖
   useEffect(() => {
@@ -512,6 +638,15 @@ export default function PapersPage() {
           filePath: formData.filePath || undefined,
           fileName: formData.fileName || undefined,
           fileSize: formData.fileSize || undefined,
+          docType: formData.docType || "J",
+          pubInfo:
+            formData.publisher || formData.publishPlace || formData.institution
+              ? JSON.stringify({
+                  publisher: formData.publisher || null,
+                  publishPlace: formData.publishPlace || null,
+                  institution: formData.institution || null,
+                })
+              : null,
         }),
       });
       if (res.ok) {
@@ -565,7 +700,7 @@ export default function PapersPage() {
     setPasteText("");
     setParsedPapers([]);
     setParsedFormat("");
-    setFormData({ title: "", authors: "", journal: "", year: "", doi: "", abstract: "", filePath: "", fileName: "", fileSize: 0 });
+    setFormData({ title: "", authors: "", journal: "", year: "", doi: "", abstract: "", filePath: "", fileName: "", fileSize: 0, docType: "J", publisher: "", publishPlace: "", institution: "" });
     setPdfSource("");
   };
 
@@ -687,6 +822,8 @@ export default function PapersPage() {
             doi: p.doi || undefined,
             abstract: p.abstract || undefined,
             url: p.url || undefined,
+            docType: p.docType || "J",
+            pubInfo: p.pubInfo || null,
           }),
         });
         if (res.ok) ok++;
@@ -855,33 +992,50 @@ export default function PapersPage() {
   return (
     <div className="p-6 space-y-5 max-w-7xl">
       {/* 标题行 */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold text-foreground">文献管理</h1>
           <p className="text-sm text-muted-foreground mt-0.5">共 {total} 篇文献</p>
         </div>
-        <button
-          onClick={() => {
-            resetForm();
-            setShowNewModal(true);
-          }}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          添加文献
-        </button>
-        <button
-          onClick={() => {
-            setImportParsed([]);
-            setImportSelected(new Set());
-            setImportFormat("");
-            setShowImportModal(true);
-          }}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm font-medium hover:bg-muted transition-colors"
-        >
-          <FileUp className="h-4 w-4" />
-          批量导入
-        </button>
+        {/* 操作按钮组：右对齐、统一高度、主次分明 */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => {
+              resetForm();
+              setShowNewModal(true);
+            }}
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 active:scale-[0.98] transition-all whitespace-nowrap"
+          >
+            <Plus className="h-4 w-4" />
+            添加文献
+          </button>
+          <span className="w-px h-5 bg-border" aria-hidden />
+          <button
+            onClick={() => {
+              setImportParsed([]);
+              setImportSelected(new Set());
+              setImportFormat("");
+              setShowImportModal(true);
+            }}
+            title="从 BibTeX / RIS / EndNote 导入文献"
+            className="inline-flex items-center gap-1.5 h-9 px-3 border rounded-lg text-sm font-medium text-foreground/80 hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+          >
+            <FileUp className="h-4 w-4 text-muted-foreground" />
+            导入文献
+          </button>
+          <button
+            onClick={() => {
+              setPdfItems([]);
+              setPdfSelected(new Set());
+              setShowPdfModal(true);
+            }}
+            title="批量导入 PDF，自动识别标题/作者/期刊/年份"
+            className="inline-flex items-center gap-1.5 h-9 px-3 border rounded-lg text-sm font-medium text-foreground/80 hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap"
+          >
+            <Upload className="h-4 w-4 text-muted-foreground" />
+            导入 PDF
+          </button>
+        </div>
       </div>
 
       {/* 筛选栏 */}
@@ -1404,13 +1558,59 @@ export default function PapersPage() {
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm font-medium">期刊</label>
-                    <input
-                      value={formData.journal}
-                      onChange={(e) => setFormData({ ...formData, journal: e.target.value })}
+                    <label className="text-sm font-medium">文献类型（GB/T 7714）</label>
+                    <select
+                      value={formData.docType}
+                      onChange={(e) => setFormData({ ...formData, docType: e.target.value })}
                       className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                    />
+                    >
+                      {DOC_TYPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
                   </div>
+                  {formData.docType !== "J" && formData.docType !== "N" && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-sm font-medium">
+                          {formData.docType === "D" ? "学位授予单位" : "出版者"}
+                        </label>
+                        <input
+                          value={formData.docType === "D" ? formData.institution : formData.publisher}
+                          onChange={(e) =>
+                            setFormData(
+                              formData.docType === "D"
+                                ? { ...formData, institution: e.target.value }
+                                : { ...formData, publisher: e.target.value }
+                            )
+                          }
+                          placeholder={formData.docType === "D" ? "如：清华大学" : "如：科学出版社"}
+                          className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">出版地</label>
+                        <input
+                          value={formData.publishPlace}
+                          onChange={(e) => setFormData({ ...formData, publishPlace: e.target.value })}
+                          placeholder="如：北京"
+                          className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {(formData.docType === "J" || formData.docType === "N") && (
+                    <div>
+                      <label className="text-sm font-medium">
+                        {formData.docType === "N" ? "报纸名" : "期刊"}
+                      </label>
+                      <input
+                        value={formData.journal}
+                        onChange={(e) => setFormData({ ...formData, journal: e.target.value })}
+                        className="w-full mt-1 h-9 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                  )}
                   <div>
                     <label className="text-sm font-medium">DOI</label>
                     <input
@@ -2034,6 +2234,288 @@ export default function PapersPage() {
                   )}
                   导入选中（{importSelected.size}）
                 </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 批量导入 PDF 弹窗 */}
+      {showPdfModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-2xl border bg-card shadow-xl flex flex-col">
+            {/* 头部 */}
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h2 className="text-base font-semibold flex items-center gap-2">
+                <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-primary/10 text-primary">
+                  <Upload className="h-4 w-4" />
+                </span>
+                批量导入 PDF 文献
+              </h2>
+              <button
+                onClick={() => setShowPdfModal(false)}
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* 主体 */}
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {pdfItems.length === 0 ? (
+                <label
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files?.length)
+                      handleImportPdf(e.dataTransfer.files);
+                  }}
+                  className={`flex flex-col items-center justify-center gap-3 border-2 border-dashed rounded-xl py-14 cursor-pointer transition-colors ${
+                    pdfLoading
+                      ? "border-primary/40 bg-primary/5"
+                      : "border-muted-foreground/25 hover:border-primary/50 hover:bg-primary/5"
+                  }`}
+                >
+                  <span className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-muted text-muted-foreground">
+                    <Upload className="h-6 w-6" />
+                  </span>
+                  <span className="text-sm font-medium">
+                    {pdfLoading ? "正在解析…" : "点击选择，或将 PDF 拖拽到此处"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    自动识别 标题 / 作者 / 期刊 / 年份，支持一次多选多个文件
+                  </span>
+                  <input
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    multiple
+                    className="hidden"
+                    disabled={pdfLoading}
+                    onChange={(e) => {
+                      handleImportPdf(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              ) : (
+                <>
+                  {/* 工具栏 */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      已解析 <b className="text-foreground">{pdfItems.length}</b> 篇 PDF
+                      <span className="ml-2 text-xs">
+                        已选 <b className="text-primary">{pdfSelected.size}</b>
+                      </span>
+                    </span>
+                    <button
+                      onClick={() =>
+                        setPdfSelected(
+                          pdfSelected.size === pdfItems.length
+                            ? new Set()
+                            : new Set(pdfItems.map((_, i) => i)),
+                        )
+                      }
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      {pdfSelected.size === pdfItems.length ? "取消全选" : "全选"}
+                    </button>
+                  </div>
+
+                  {/* 卡片列表 */}
+                  <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+                    {pdfItems.map((p, i) => {
+                      const detected =
+                        !!(p.title && p.authors?.length && p.journal && p.year);
+                      const selected = pdfSelected.has(i);
+                      return (
+                        <div
+                          key={i}
+                          className={`rounded-xl border p-3.5 transition-all ${
+                            selected
+                              ? "border-primary ring-1 ring-primary/30 bg-primary/[0.03]"
+                              : "border-muted-foreground/15 bg-background hover:border-primary/30"
+                          }`}
+                        >
+                          {/* 卡片头：文件名 + 识别状态 */}
+                          <div className="flex items-center gap-2 mb-3">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={(e) => {
+                                const next = new Set(pdfSelected);
+                                if (e.target.checked) next.add(i);
+                                else next.delete(i);
+                                setPdfSelected(next);
+                              }}
+                              className="mt-0.5 accent-primary"
+                            />
+                            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span
+                              className="text-xs text-muted-foreground truncate flex-1"
+                              title={p.originalName}
+                            >
+                              {p.originalName}
+                            </span>
+                            {p.error ? (
+                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 border border-red-200 shrink-0">
+                                解析异常
+                              </span>
+                            ) : detected ? (
+                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 border border-emerald-200 shrink-0">
+                                已识别
+                              </span>
+                            ) : (
+                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200 shrink-0">
+                                待核对
+                              </span>
+                            )}
+                          </div>
+
+                          {/* 可编辑字段 */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pl-6">
+                            <div className="sm:col-span-2">
+                              <label className="text-[11px] text-muted-foreground">标题</label>
+                              <input
+                                value={p.title || ""}
+                                onChange={(e) => {
+                                  const n = [...pdfItems];
+                                  n[i] = { ...n[i], title: e.target.value };
+                                  setPdfItems(n);
+                                }}
+                                className="w-full border border-muted-foreground/20 rounded-md px-2.5 py-1.5 text-sm bg-background focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition"
+                                placeholder="未能识别，请手填"
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <label className="text-[11px] text-muted-foreground">
+                                作者（逗号或 “and” 分隔）
+                              </label>
+                              <input
+                                value={(p.authors || []).join(", ")}
+                                onChange={(e) => {
+                                  const n = [...pdfItems];
+                                  n[i] = {
+                                    ...n[i],
+                                    authors: e.target.value
+                                      .split(/,| and /i)
+                                      .map((s) => s.trim())
+                                      .filter(Boolean),
+                                  };
+                                  setPdfItems(n);
+                                }}
+                                className="w-full border border-muted-foreground/20 rounded-md px-2.5 py-1.5 text-sm bg-background focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition"
+                                placeholder="未能识别，请手填"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground">期刊</label>
+                              <input
+                                value={p.journal || ""}
+                                onChange={(e) => {
+                                  const n = [...pdfItems];
+                                  n[i] = { ...n[i], journal: e.target.value };
+                                  setPdfItems(n);
+                                }}
+                                className="w-full border border-muted-foreground/20 rounded-md px-2.5 py-1.5 text-sm bg-background focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground">年份</label>
+                              <input
+                                value={p.year ?? ""}
+                                onChange={(e) => {
+                                  const n = [...pdfItems];
+                                  n[i] = {
+                                    ...n[i],
+                                    year: e.target.value ? Number(e.target.value) : null,
+                                  };
+                                  setPdfItems(n);
+                                }}
+                                className="w-full border border-muted-foreground/20 rounded-md px-2.5 py-1.5 text-sm bg-background focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition"
+                                inputMode="numeric"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground">卷</label>
+                              <input
+                                value={p.volume || ""}
+                                onChange={(e) => {
+                                  const n = [...pdfItems];
+                                  n[i] = { ...n[i], volume: e.target.value };
+                                  setPdfItems(n);
+                                }}
+                                className="w-full border border-muted-foreground/20 rounded-md px-2.5 py-1.5 text-sm bg-background focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground">页</label>
+                              <input
+                                value={p.pages || ""}
+                                onChange={(e) => {
+                                  const n = [...pdfItems];
+                                  n[i] = { ...n[i], pages: e.target.value };
+                                  setPdfItems(n);
+                                }}
+                                className="w-full border border-muted-foreground/20 rounded-md px-2.5 py-1.5 text-sm bg-background focus:border-primary focus:ring-1 focus:ring-primary/30 outline-none transition"
+                              />
+                            </div>
+                          </div>
+
+                          {/* 底部元信息 */}
+                          {p.doi && (
+                            <div className="mt-2.5 pl-6 text-[11px] text-muted-foreground truncate">
+                              DOI {p.doi}
+                            </div>
+                          )}
+                          {p.error && (
+                            <div className="mt-1.5 pl-6 text-[11px] text-red-600">
+                              解析异常：{p.error}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setPdfItems([]);
+                      setPdfSelected(new Set());
+                    }}
+                    className="text-xs text-muted-foreground hover:underline"
+                  >
+                    重新选择文件
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* 底部操作 */}
+            {pdfItems.length > 0 && (
+              <div className="flex items-center justify-between gap-2 px-5 py-4 border-t bg-muted/20">
+                <span className="text-xs text-muted-foreground">
+                  将导入 <b className="text-foreground">{pdfSelected.size}</b> / {pdfItems.length} 篇
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowPdfModal(false)}
+                    className="px-4 h-9 text-sm rounded-lg border hover:bg-muted transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleConfirmPdfImport}
+                    disabled={pdfSubmitting || pdfSelected.size === 0}
+                    className="inline-flex items-center gap-1.5 px-4 h-9 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    {pdfSubmitting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    导入选中（{pdfSelected.size}）
+                  </button>
+                </div>
               </div>
             )}
           </div>

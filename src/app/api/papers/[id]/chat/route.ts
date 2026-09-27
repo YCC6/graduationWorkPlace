@@ -12,13 +12,14 @@ import {
   requireAiConfig,
   resolveChatModel,
   type ChatMessage,
+  type ContentPart,
 } from "@/lib/ai";
 
 export const maxDuration = 300;
 
 interface IncomingMessage {
   role: "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
 
 /** 拼装送给模型的论文内容：元信息 + 正文（过长则抽取关键章节） */
@@ -91,18 +92,21 @@ export async function POST(
       : [];
     const deepThink: boolean = !!body.deepThink;
     const scopePref: "abstract" | "fulltext" | undefined = body.scope;
+    // 本轮随文本一起上传的图片（data URL），最多 8 张，用于视觉分析
+    const images: string[] = Array.isArray(body.images)
+      ? body.images
+          .filter((x: unknown): x is string => typeof x === "string")
+          .slice(0, 8)
+      : [];
 
     // 仅保留有效的用户/助手轮次，并限制单条长度，避免历史过长
     const cleanHistory = history
-      .filter(
-        (m) =>
-          (m.role === "user" || m.role === "assistant") &&
-          typeof m.content === "string",
-      )
+      .filter((m) => m.role === "user" || m.role === "assistant")
       .slice(-20)
       .map((m) => ({
         role: m.role,
-        content: m.content.slice(0, 8000),
+        content:
+          typeof m.content === "string" ? m.content.slice(0, 8000) : m.content,
       }));
 
     const paper = await prisma.paper.findUnique({
@@ -124,11 +128,11 @@ export async function POST(
 
     const hasFulltext = !!(paper.content && paper.content.trim().length > 200);
     const hasAbstract = !!(paper.abstract && paper.abstract.trim());
-    if (!hasFulltext && !hasAbstract) {
+    if (!hasFulltext && !hasAbstract && images.length === 0) {
       return NextResponse.json(
         {
           error:
-            "这篇文献既没有摘要也没有全文，请先在 PDF 预览区点「全文索引」提取正文",
+            "这篇文献既没有摘要也没有全文，请先在 PDF 预览区点「全文索引」提取正文；或上传一张图片让我分析",
           code: "NO_CONTENT",
         },
         { status: 400 },
@@ -157,14 +161,41 @@ export async function POST(
               : ""
           }\n\n${ctx.text}`;
 
+    // 用户上传了图片时，允许模型结合图片作答（图表/公式/实验照片/手写笔记等）
+    const visionNote = images.length
+      ? "\n\n【图片输入】用户在本轮还上传了图片，可能包含论文图表、公式、实验照片或手写笔记等。请结合图片内容作答：能看清的部分给出具体描述与解读，与论文相关时交叉印证；看不清或无法判断的部分如实说明，不要编造图中不存在的信息。"
+      : "";
+
     const messages: ChatMessage[] = [
       {
         role: "system",
-        content: deepThink ? CHAT_SYSTEM_PROMPT_DEEP : CHAT_SYSTEM_PROMPT,
+        content: (deepThink ? CHAT_SYSTEM_PROMPT_DEEP : CHAT_SYSTEM_PROMPT) + visionNote,
       },
       { role: "user", content: contextText },
       ...(cleanHistory as ChatMessage[]),
     ];
+
+    // 将本轮图片注入到最后一条用户消息（多模态 content 数组）
+    if (images.length) {
+      const parts: ContentPart[] = images.map((url) => ({
+        type: "image_url",
+        image_url: { url },
+      }));
+      const lastIdx = messages.length - 1;
+      if (lastIdx >= 0 && messages[lastIdx].role === "user") {
+        const prev =
+          typeof messages[lastIdx].content === "string"
+            ? messages[lastIdx].content
+            : "";
+        messages[lastIdx].content = [
+          { type: "text", text: prev || "（见上传的图片）" },
+          ...parts,
+        ];
+      } else {
+        // 兜底：历史里没有用户消息也能单独成一轮
+        messages.push({ role: "user", content: [{ type: "text", text: "（见上传的图片）" }, ...parts] });
+      }
+    }
 
     const encoder = new TextEncoder();
     const send = (obj: unknown) =>
@@ -179,6 +210,7 @@ export async function POST(
                 model: chatCfg.model,
                 source,
                 deepThink,
+                hasImages: images.length > 0,
                 estimatedTokens: estimateTokens(contextText),
               },
             }),

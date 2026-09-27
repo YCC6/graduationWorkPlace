@@ -16,52 +16,143 @@ function firstSurname(name: string): string {
 }
 
 /**
- * 生成 GB/T 7714 格式引用
+ * 出版信息（pubInfo JSON）结构
+ */
+interface PubInfo {
+  publisher?: string | null;
+  publishPlace?: string | null;
+  institution?: string | null; // 学位授予单位 / 报告发布单位
+  degree?: string | null; // 学位级别
+  version?: string | null; // 报纸版次 / 版本
+  newspaper?: string | null; // 报纸名
+  date?: string | null; // 报纸/电子资源完整日期 YYYY-MM-DD
+  updateDate?: string | null; // 电子资源更新日期
+  citeDate?: string | null; // 电子资源引用日期
+  patentCountry?: string | null;
+  patentNumber?: string | null;
+  publicDate?: string | null;
+}
+
+function parsePubInfo(raw: string | null | undefined): PubInfo {
+  if (!raw) return {};
+  try {
+    const o = JSON.parse(raw);
+    if (o && typeof o === "object") return o as PubInfo;
+  } catch {
+    /* 忽略损坏的 JSON */
+  }
+  return {};
+}
+
+function authorPrefix(authors: string[]): string {
+  if (authors.length === 0) return "";
+  const head = authors.slice(0, 3).join(", ");
+  return (authors.length > 3 ? `${head}, 等` : head) + ". ";
+}
+
+/**
+ * 生成 GB/T 7714 格式引用（按文献类型分支）
  */
 function generateGBT7714(paper: any): string {
-  // 标准文献 [S]
+  // 标准文献 [S]（优先用标准号，符合 GB/T、HJ、EPA、ISO 等环境标准著录）
   if (paper.standardType && paper.standardNumber) {
     return `${paper.standardNumber} ${paper.title}[S].`;
   }
 
   const authors = parseJSON(paper.authors);
-  let citation = "";
+  const lead = authorPrefix(authors);
+  const docType: string = (paper.docType || "J").toUpperCase();
+  const pub = parsePubInfo(paper.pubInfo);
+  const doi = paper.doi ? ` DOI:${paper.doi}` : "";
 
-  // 作者部分：最多列出 3 人
-  if (authors.length > 0) {
-    citation += authors.slice(0, 3).join(", ");
-    if (authors.length > 3) citation += ", 等";
-    citation += ". ";
+  switch (docType) {
+    // 期刊文章
+    case "J": {
+      let s = lead + `${paper.title}[J]. `;
+      if (paper.journal) s += `${paper.journal}, `;
+      if (paper.year) s += `${paper.year}`;
+      if (paper.volume || paper.issue) {
+        s += ", ";
+        if (paper.volume) s += paper.volume;
+        if (paper.issue) s += `(${paper.issue})`;
+      }
+      if (paper.pages) s += `: ${paper.pages}`;
+      s += ".";
+      return s + doi;
+    }
+
+    // 专著 / 论文集 / 报告 / 标准：出版地: 出版者, 年.
+    case "M":
+    case "C":
+    case "R":
+    case "S": {
+      let s = lead + `${paper.title}[${docType}]. `;
+      const place = pub.publishPlace || "";
+      // 报告[R]/标准[S] 的出版者常为发布单位（institution）
+      const publisher =
+        pub.publisher ||
+        (docType === "R" || docType === "S" ? pub.institution : null) ||
+        paper.journal ||
+        "";
+      if (place && publisher) s += `${place}: ${publisher}, `;
+      else if (publisher) s += `${publisher}, `;
+      s += `${paper.year || ""}.`;
+      return s + doi;
+    }
+
+    // 学位论文：保存地: 保存单位, 年.
+    case "D": {
+      let s = lead + `${paper.title}[D]. `;
+      const place = pub.publishPlace || "";
+      const inst = pub.institution || paper.journal || "";
+      if (place && inst) s += `${place}: ${inst}, `;
+      else if (inst) s += `${inst}, `;
+      s += `${paper.year || ""}.`;
+      return s;
+    }
+
+    // 报纸文章：报纸名, 出版日期(版次).
+    case "N": {
+      const newspaper = pub.newspaper || paper.journal || "";
+      let s = lead + `${paper.title}[N]. ${newspaper}`;
+      if (pub.date) s += `, ${pub.date}`;
+      else if (paper.year) s += `, ${paper.year}`;
+      if (pub.version) s += `(${pub.version})`;
+      return s + ".";
+    }
+
+    // 专利：专利国别, 专利号. 公告日期.
+    case "P": {
+      let s = lead + `${paper.title}[P]. `;
+      if (pub.patentCountry) s += `${pub.patentCountry}, `;
+      if (pub.patentNumber) s += `${pub.patentNumber}. `;
+      if (pub.publicDate) s += `${pub.publicDate}.`;
+      else if (paper.year) s += `${paper.year}.`;
+      return s;
+    }
+
+    // 电子资源：题名[EB/OL]. (更新日期)[引用日期]. 获取路径.
+    case "EB/OL":
+    case "EB":
+    case "OL": {
+      let s = lead + `${paper.title}[EB/OL]. `;
+      if (pub.updateDate) s += `(${pub.updateDate})`;
+      if (pub.citeDate) s += `[${pub.citeDate}]`;
+      const link = paper.url || (paper.doi ? `https://doi.org/${paper.doi}` : "");
+      return s + (link ? ` ${link}.` : ".");
+    }
+
+    // 其他 / 未定义类型 [Z]：退路，按专著形式
+    default: {
+      let s = lead + `${paper.title}[Z]. `;
+      const place = pub.publishPlace || "";
+      const publisher = pub.publisher || paper.journal || "";
+      if (place && publisher) s += `${place}: ${publisher}, `;
+      else if (publisher) s += `${publisher}, `;
+      s += `${paper.year || ""}.`;
+      return s + doi;
+    }
   }
-
-  // 题名
-  citation += `${paper.title}[J]. `;
-
-  // 刊名
-  if (paper.journal) {
-    citation += `${paper.journal}, `;
-  }
-
-  // 年份
-  if (paper.year) {
-    citation += `${paper.year}`;
-  }
-
-  // 卷号(期号)
-  if (paper.volume || paper.issue) {
-    citation += ", ";
-    if (paper.volume) citation += paper.volume;
-    if (paper.issue) citation += `(${paper.issue})`;
-  }
-
-  // 页码
-  if (paper.pages) {
-    citation += `: ${paper.pages}`;
-  }
-
-  citation += ".";
-
-  return citation;
 }
 
 /** APA 第 7 版（简化：保留作者全名，未做姓氏/名缩写拆分） */

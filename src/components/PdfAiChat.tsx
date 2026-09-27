@@ -6,6 +6,7 @@ import {
   AlertCircle,
   Brain,
   Copy,
+  ImagePlus,
   Loader2,
   MessageSquarePlus,
   Send,
@@ -13,6 +14,7 @@ import {
   Sparkles,
   Square,
   StickyNote,
+  X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,6 +30,8 @@ interface ChatTurn {
   content: string;
   reasoning?: string;
   pending?: boolean;
+  /** 用户上传、随本条消息一起发送的本地图片（仅内存态，持久化时剥离大体积 data URL） */
+  images?: { name: string; url?: string }[];
 }
 
 interface Props {
@@ -58,10 +62,50 @@ export default function PdfAiChat({
   const [needConfig, setNeedConfig] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 图片附件（待发送的本地图片，已压缩为 data URL）
+  const [attachments, setAttachments] = useState<
+    { id: string; url: string; name: string }[]
+  >([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // 已落库的消息 id（幂等去重，避免重复写入）
+  const savedIdsRef = useRef<Set<string>>(new Set());
+  // 流式接收时的内容/推理累加器，用于对话结束后落库
+  const accContentRef = useRef("");
+  const accReasoningRef = useRef("");
+
+  /** 把单条对话写入数据库（图片只传文件名，剥离 data URL） */
+  const persist = useCallback(
+    async (turn: ChatTurn) => {
+      if (savedIdsRef.current.has(turn.id)) return;
+      try {
+        const res = await fetch(`/api/papers/${paperId}/chat/history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              {
+                id: turn.id,
+                role: turn.role,
+                content: turn.content,
+                reasoning: turn.reasoning,
+                images: turn.images?.map((i) => ({ name: i.name })),
+              },
+            ],
+          }),
+        });
+        if (res.ok) savedIdsRef.current.add(turn.id);
+      } catch {
+        /* 离线时静默失败，下次发送/接收时再尝试 */
+      }
+    },
+    [paperId],
+  );
 
   // 探测可用范围（复用 summarize 的缓存接口即可）
   const probe = useCallback(async () => {
@@ -81,32 +125,53 @@ export default function PdfAiChat({
     probe();
   }, [probe]);
 
-  // 加载已保存的对话（按文献 ID 隔离）
+  // 加载已保存的对话（优先从数据库读取，实现多设备同步）
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(`chat:${paperId}`);
-      if (raw) {
-        const saved = JSON.parse(raw) as ChatTurn[];
-        // 把可能中断的 pending 消息标记为已完成，避免卡在加载态
-        setMessages(saved.map((m) => ({ ...m, pending: false })));
-      }
-    } catch {
-      /* 忽略损坏的数据 */
-    }
-  }, [paperId]);
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/papers/${paperId}/chat/history`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const remote: ChatTurn[] = Array.isArray(data.messages)
+          ? data.messages
+          : [];
+        if (!alive) return;
 
-  // 持久化对话到 localStorage
-  useEffect(() => {
-    try {
-      if (messages.length === 0) {
-        localStorage.removeItem(`chat:${paperId}`);
-      } else {
-        localStorage.setItem(`chat:${paperId}`, JSON.stringify(messages));
+        if (remote.length) {
+          // 数据库已有记录：直接采用，并标记已落库避免重复写入
+          savedIdsRef.current = new Set(remote.map((m) => m.id));
+          setMessages(remote.map((m) => ({ ...m, pending: false })));
+        } else {
+          // 首次为空：把浏览器里已有的旧对话一次性迁移进数据库，随后清掉本地副本
+          const raw = localStorage.getItem(`chat:${paperId}`);
+          if (raw) {
+            const local = JSON.parse(raw) as ChatTurn[];
+            const slim = local.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              reasoning: m.reasoning,
+              images: m.images?.map((i) => ({ name: i.name })),
+            }));
+            await fetch(`/api/papers/${paperId}/chat/history`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ messages: slim }),
+            });
+            savedIdsRef.current = new Set(local.map((m) => m.id));
+            setMessages(local.map((m) => ({ ...m, pending: false })));
+            localStorage.removeItem(`chat:${paperId}`);
+          }
+        }
+      } catch {
+        /* 离线时忽略，使用内存态 */
       }
-    } catch {
-      /* 隐私模式或空间不足时静默失败 */
-    }
-  }, [messages, paperId]);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [paperId]);
 
   useEffect(() => {
     if (!stickBottomRef.current) return;
@@ -121,34 +186,127 @@ export default function PdfAiChat({
       el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
+  // 读取并压缩图片：限制最长边 <=1600px，统一转 JPEG 以控制体积
+  const addImages = useCallback((files: FileList | File[]) => {
+    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (!list.length) {
+      toast.error("请选择图片文件");
+      return;
+    }
+    list.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = reader.result as string;
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          const maxDim = 1600;
+          if (width > maxDim || height > maxDim) {
+            const ratio = Math.min(maxDim / width, maxDim / height);
+            width = Math.round(width * ratio);
+            height = Math.round(height * ratio);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          const finalize = (url: string) =>
+            setAttachments((prev) => [
+              ...prev,
+              {
+                id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                url,
+                name: file.name,
+              },
+            ]);
+          if (!ctx) {
+            finalize(src); // 无 canvas 时降级用原图
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          try {
+            finalize(canvas.toDataURL("image/jpeg", 0.85));
+          } catch {
+            finalize(src);
+          }
+        };
+        img.onerror = () => setAttachments((prev) => [
+          ...prev,
+          { id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, url: src, name: file.name },
+        ]);
+        img.src = src;
+      };
+      reader.onerror = () => toast.error(`读取 ${file.name} 失败`);
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  const removeAttachment = (id: string) =>
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+
+  // 支持 Ctrl/⌘+V 直接粘贴图片（截图等），走与选图相同的压缩流程
+  const onPaste = (e: React.ClipboardEvent) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const imageFiles: File[] = [];
+    if (dt.files && dt.files.length) {
+      for (const f of Array.from(dt.files)) {
+        if (f.type.startsWith("image/")) imageFiles.push(f);
+      }
+    } else {
+      // 部分浏览器把剪贴板图片放在 items 而非 files
+      for (const item of Array.from(dt.items)) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+    }
+    if (imageFiles.length) {
+      e.preventDefault();
+      addImages(imageFiles);
+      toast.success(`已粘贴 ${imageFiles.length} 张图片`);
+    }
+  };
+
   const send = async (raw?: string) => {
     const text = (raw ?? input).trim();
-    if (!text || sending) return;
+    if ((!text && attachments.length === 0) || sending) return;
 
+    const uid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userTurn: ChatTurn = {
-      id: `u-${Date.now()}`,
+      id: `u-${uid}`,
       role: "user",
       content: text,
+      images:
+        attachments.length > 0
+          ? attachments.map((a) => ({ name: a.name, url: a.url }))
+          : undefined,
     };
     const assistantTurn: ChatTurn = {
-      id: `a-${Date.now()}`,
+      id: `a-${uid}`,
       role: "assistant",
       content: "",
       reasoning: "",
       pending: true,
     };
 
-    // 构造历史（不含当前这一轮及占位助手）
+    // 构造历史（不含当前这一轮及占位助手）；图片只随本轮发送，不进历史文本
     const history = [
       ...messages.filter((m) => !m.pending),
       userTurn,
     ].map((m) => ({ role: m.role, content: m.content }));
 
+    accContentRef.current = "";
+    accReasoningRef.current = "";
     setMessages((prev) => [...prev, userTurn, assistantTurn]);
     setInput("");
+    setAttachments([]);
     setSending(true);
     setError(null);
     stickBottomRef.current = true;
+    // 用户轮立即落库（幂等）
+    persist(userTurn);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -157,7 +315,12 @@ export default function PdfAiChat({
       const res = await fetch(`/api/papers/${paperId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, deepThink, scope }),
+        body: JSON.stringify({
+          messages: history,
+          deepThink,
+          scope,
+          images: attachments.map((a) => a.url),
+        }),
         signal: controller.signal,
       });
 
@@ -195,6 +358,7 @@ export default function PdfAiChat({
           try {
             const evt = JSON.parse(t.slice(5).trim());
             if (evt.delta) {
+              accContentRef.current += evt.delta;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantTurn.id
@@ -203,6 +367,7 @@ export default function PdfAiChat({
                 ),
               );
             } else if (evt.reasoning) {
+              accReasoningRef.current += evt.reasoning;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantTurn.id
@@ -229,6 +394,15 @@ export default function PdfAiChat({
           m.id === assistantTurn.id ? { ...m, pending: false } : m,
         ),
       );
+      // 助手轮落库（幂等）
+      if (accContentRef.current.trim() || accReasoningRef.current.trim()) {
+        persist({
+          id: assistantTurn.id,
+          role: "assistant",
+          content: accContentRef.current,
+          reasoning: accReasoningRef.current || undefined,
+        });
+      }
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         toast("已停止生成");
@@ -237,6 +411,15 @@ export default function PdfAiChat({
             m.id === assistantTurn.id ? { ...m, pending: false } : m,
           ),
         );
+        // 中途停止也尽量保存已生成的部分
+        if (accContentRef.current.trim() || accReasoningRef.current.trim()) {
+          persist({
+            id: assistantTurn.id,
+            role: "assistant",
+            content: accContentRef.current,
+            reasoning: accReasoningRef.current || undefined,
+          });
+        }
       } else {
         setError((err as Error).message || "对话失败");
       }
@@ -247,12 +430,13 @@ export default function PdfAiChat({
 
   const stop = () => abortRef.current?.abort();
 
-  const clearChat = () => {
+  const clearChat = async () => {
     if (sending) return;
     setMessages([]);
     setError(null);
+    savedIdsRef.current.clear();
     try {
-      localStorage.removeItem(`chat:${paperId}`);
+      await fetch(`/api/papers/${paperId}/chat/history`, { method: "DELETE" });
     } catch {
       /* 忽略 */
     }
@@ -287,6 +471,9 @@ export default function PdfAiChat({
 
   const disabled = sending;
   const noSource = scope === "fulltext" ? !hasFulltext : !hasAbstract;
+  const canSend = !!input.trim() || attachments.length > 0;
+  // 无正文且无图片时禁止发送（避免对空白文献提问）；有图片则允许
+  const sendDisabled = disabled || !canSend || (noSource && attachments.length === 0);
 
   return (
     <div className="flex flex-col h-full bg-gradient-to-b from-background to-muted/20">
@@ -390,7 +577,7 @@ export default function PdfAiChat({
                 <button
                   key={s}
                   onClick={() => send(s)}
-                  disabled={disabled || noSource}
+                  disabled={disabled || (noSource && attachments.length === 0)}
                   className="group px-4 py-2.5 rounded-xl border border-border/60 bg-background text-left text-xs hover:bg-primary/5 hover:border-primary/30 transition-all duration-200 shadow-sm hover:shadow-md disabled:opacity-40"
                 >
                   <span className="text-muted-foreground group-hover:text-foreground transition-colors">
@@ -465,9 +652,33 @@ export default function PdfAiChat({
                   )
                 )
               ) : (
-                <span className="whitespace-pre-wrap leading-relaxed">
-                  {m.content}
-                </span>
+                <>
+                  {m.images && m.images.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-1.5">
+                      {m.images.map((img, i) =>
+                        img.url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            key={i}
+                            src={img.url}
+                            alt={img.name}
+                            className="h-20 w-20 object-cover rounded-lg border border-white/30 shadow-sm"
+                          />
+                        ) : (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 text-[11px]"
+                          >
+                            📎 {img.name}
+                          </span>
+                        ),
+                      )}
+                    </div>
+                  )}
+                  <span className="whitespace-pre-wrap leading-relaxed">
+                    {m.content}
+                  </span>
+                </>
               )}
 
               {m.role === "assistant" &&
@@ -498,8 +709,53 @@ export default function PdfAiChat({
       </div>
 
       {/* 输入区 */}
-      <div className="border-t border-border/60 bg-background/80 backdrop-blur-sm p-3">
+      <div
+        className="border-t border-border/60 bg-background/80 backdrop-blur-sm p-3"
+        onPaste={onPaste}
+      >
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2.5 px-0.5">
+            {attachments.map((a) => (
+              <div key={a.id} className="relative group">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={a.url}
+                  alt={a.name}
+                  className="h-16 w-16 object-cover rounded-lg border border-border/60 shadow-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  title="移除"
+                  className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-red-500 text-white flex items-center justify-center shadow hover:scale-110 transition-transform"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="relative flex items-end gap-2 rounded-2xl border border-border/70 bg-muted/30 shadow-inner focus-within:border-primary/40 focus-within:shadow-md focus-within:shadow-primary/5 transition-all duration-200 p-1.5">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled}
+            title="上传图片分析（图表 / 公式 / 实验照片 / 手写笔记）"
+            className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-all disabled:opacity-50"
+          >
+            <ImagePlus className="h-4 w-4" />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length) addImages(e.target.files);
+              e.target.value = "";
+            }}
+          />
           <textarea
             ref={inputRef}
             value={input}
@@ -512,9 +768,11 @@ export default function PdfAiChat({
             }}
             rows={1}
             placeholder={
-              noSource ? "请先提取 PDF 正文…" : "就这篇文献提问…（Enter 发送，Shift+Enter 换行）"
+              noSource && attachments.length === 0
+                ? "请先提取 PDF 正文，或上传/粘贴图片让我分析…"
+                : "就这篇文献提问，或上传/粘贴图片分析…（Enter 发送，Shift+Enter 换行）"
             }
-            disabled={disabled || noSource}
+            disabled={disabled}
             className="flex-1 resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-50 max-h-32 leading-relaxed"
           />
           {sending ? (
@@ -528,20 +786,22 @@ export default function PdfAiChat({
           ) : (
             <button
               onClick={() => send()}
-              disabled={!input.trim() || noSource}
+              disabled={sendDisabled}
               className={`inline-flex items-center justify-center gap-1.5 px-4 h-9 rounded-xl text-xs font-semibold transition-all duration-200 shrink-0 ${
-                input.trim() && !noSource
+                !sendDisabled
                   ? "bg-gradient-to-r from-primary to-blue-500 text-white shadow-sm hover:shadow-md hover:shadow-primary/25 hover:scale-[1.02] active:scale-95"
                   : "bg-muted text-muted-foreground cursor-not-allowed"
               }`}
             >
-              <Send className={`h-3.5 w-3.5 ${input.trim() && !noSource ? "" : "opacity-50"}`} />
+              <Send className={`h-3.5 w-3.5 ${!sendDisabled ? "" : "opacity-50"}`} />
               发送
             </button>
           )}
         </div>
         <p className="text-[10px] text-center text-muted-foreground/50 mt-2 select-none">
-          AI 回答基于论文内容生成，仅供参考
+          {attachments.length > 0
+            ? "图片分析需要支持视觉的模型（如 GPT-4o、通义千问 VL、GLM-4V 等）"
+            : "支持点击图标或 Ctrl/⌘+V 粘贴图片 · AI 回答基于论文内容，仅供参考"}
         </p>
       </div>
     </div>

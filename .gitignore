@@ -60,3 +60,32 @@ prisma/*.db.bak*
 .npmcache/
 .npmtmp/
 update_next_lock.mjs
+
+# pdfjs 抽取/校验的临时产物（不入库）
+.pdfjs.tgz
+pdfjs_dl.tgz
+.pdfjs-extract/
+.small.bin
+_list.txt
+scripts/_extract_pdfjs.mjs
+scripts/_extract_pdfjs.py
+public/pdfjs/
+public/pdfjs_new/_verify.txt
+public/pdfjs_new/web/
+# 但 pdfjs 核心运行时必须入库（上面的 “build/” 规则会误伤，这里显式放行）
+!public/pdfjs_new/build/
+!public/pdfjs_new/build/**
+public/pdfjs_new/build/*.map
+
+# 已废弃占位文件：PDF 内划词改用 public/pdfjs_new/viewer.html，不入库
+src/components/PdfJsViewer.tsx
+
+# 调试残留
+*.err
+
+# pdfjs build 中 viewer 用不到的冗余文件（viewer.html 只用 pdf.js / pdf.worker.js）
+public/pdfjs_new/build/pdf.min.js
+public/pdfjs_new/build/pdf.sandbox.js
+public/pdfjs_new/build/pdf.sandbox.min.js
+public/pdfjs_new/build/pdf.worker.entry.js
+public/pdfjs_new/build/pdf.worker.min.js

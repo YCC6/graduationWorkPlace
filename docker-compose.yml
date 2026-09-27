@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    image: grad-workbench:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "file:/data/dev.db"
+      UPLOAD_DIR: "/data/uploads"
+      NODE_ENV: "production"
+      COURSE_PARSER_PYTHON: "python3"
+      PDF_META_PYTHON: "python3"
+    volumes:
+      # SQLite 数据库 + 上传的 PDF 都在这里，务必保留/备份；删了数据就没了
+      - ./data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      # 对外端口。阿里云大陆地域 80/443 需备案，先用 8080 按 IP 访问
+      - "8080:8080"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:
