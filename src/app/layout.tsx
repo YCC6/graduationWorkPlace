@@ -8,6 +8,10 @@ export const metadata: Metadata = {
   description: "面向环境科学方向研究生的综合研究工作台",
 };
 
+// 个人应用不需要静态预渲染：页面都读了 SQLite，构建时若静态生成会因连不上数据库而失败，
+// 也会把页面固化成本地那份空数据。统一改为按请求渲染（SSR）。
+export const dynamic = "force-dynamic";
+
 // 在 hydration 前根据 localStorage / 系统偏好给 <html> 加 dark 类，消除首屏白闪
 const themeInitScript = `(function(){try{var k='gradworkbench:theme';var t=localStorage.getItem(k);if(t!=='light'&&t!=='dark'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.classList.add('dark');}}catch(e){}})();`;
 
