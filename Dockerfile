@@ -10,6 +10,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends openssl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
+# 跳过 electron 二进制下载：其 postinstall 会从 GitHub 拉 ~100MB，国内必卡；web 部署用不到
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+ENV ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/
 # next-auth@4 的 peer 依赖要求 react@^18，本项目为 React 19 → 需 --legacy-peer-deps
 RUN npm install --legacy-peer-deps --registry=https://registry.npmmirror.com
 COPY . .
